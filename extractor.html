@@ -1,0 +1,2702 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Harrison's Weekly Pricing Extractor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- External libraries (loaded from CDN; cached after first use) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Tesseract.js for OCR — only used when a vendor sends image-based PDF/PNG/JPG.
+     ~13MB language model downloads from CDN on first OCR use, cached after. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
+<style>
+  /* ==================== DESIGN TOKENS ==================== */
+  :root {
+    --ink: #1a1a17;
+    --ink-soft: #3d3d36;
+    --ink-mute: #6b6b62;
+    --paper: #f7f4ed;
+    --paper-warm: #ede7d6;
+    --cream: #e8e1cc;
+    --brand: #1f5236;       /* Deep forest green — editorial primary */
+    --brand-dark: #143523;
+    --brand-light: #2a6e48;
+    --accent: #c4622d;      /* Burnt orange accent */
+    --accent-warm: #d97f3f;
+    --good: #2a6e48;
+    --warn: #b8841a;
+    --bad: #9c2c1e;
+    --na: #6b6b62;
+    --line: rgba(26,26,23,0.12);
+    --line-strong: rgba(26,26,23,0.25);
+    --shadow-sm: 0 1px 2px rgba(26,26,23,0.06);
+    --shadow-md: 0 4px 12px rgba(26,26,23,0.08);
+    --shadow-lg: 0 12px 40px rgba(26,26,23,0.12);
+    --serif: 'Cormorant Garamond', 'Garamond', Georgia, serif;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', Menlo, monospace;
+    /* Harrison's brand blues — used ONLY for the file drop zones */
+    --drop-brand: #387eba;       /* Harrison's logo blue */
+    --drop-brand-dark: #1f4e7a;  /* Deeper navy-blue */
+    --drop-brand-wash: #e8f0f8;  /* Pale blue wash for hover backgrounds */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--sans);
+    color: var(--ink);
+    background: var(--paper);
+    background-image:
+      radial-gradient(at 8% 0%, rgba(31,82,54,0.04) 0%, transparent 40%),
+      radial-gradient(at 95% 100%, rgba(196,98,45,0.04) 0%, transparent 50%);
+    min-height: 100vh;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Load fonts from Google Fonts */
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+  /* ==================== LAYOUT ==================== */
+  .shell {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 32px 32px 80px;
+  }
+  /* ==================== HEADER ==================== */
+  header.masthead {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 24px;
+    margin-bottom: 36px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 24px;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  .brand-mark {
+    font-family: var(--serif);
+    font-weight: 700;
+    font-size: 56px;
+    line-height: 0.9;
+    letter-spacing: -0.02em;
+    color: var(--drop-brand);
+    font-style: italic;
+  }
+  .brand-mark span { color: var(--drop-brand-dark); }
+  .brand-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    border-left: 1px solid var(--line-strong);
+    padding-left: 16px;
+  }
+  .brand-name strong {
+    color: var(--ink);
+    display: block;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    font-size: 14px;
+    margin-top: 4px;
+  }
+  .meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-mute);
+    text-align: right;
+    letter-spacing: 0.04em;
+  }
+  .meta-date {
+    font-size: 14px;
+    color: var(--ink);
+    font-weight: 500;
+    margin-bottom: 2px;
+  }
+  /* ==================== MODE TOGGLE ==================== */
+  .mode-toggle {
+    margin-bottom: 32px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .mode-toggle-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .mode-tabs {
+    display: inline-flex;
+    background: var(--cream);
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    padding: 3px;
+  }
+  .mode-tab {
+    background: none;
+    border: none;
+    padding: 8px 16px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-mute);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.15s ease;
+  }
+  .mode-tab:hover { color: var(--ink); }
+  .mode-tab.active {
+    background: var(--ink);
+    color: var(--paper);
+    box-shadow: var(--shadow-sm);
+  }
+  /* ==================== STEP CARDS ==================== */
+  .step {
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 24px 28px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow-sm);
+    transition: border-color 0.2s;
+  }
+  .step.done { border-color: var(--good); }
+  .step-header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+  .step-num {
+    font-family: var(--serif);
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--accent);
+    line-height: 1;
+    font-style: italic;
+  }
+  .step-title {
+    font-family: var(--serif);
+    font-size: 24px;
+    font-weight: 500;
+    line-height: 1.2;
+    margin: 0;
+    color: var(--ink);
+  }
+  .step-status {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .step-status.ok { color: var(--good); font-weight: 500; }
+  /* ==================== DROP ZONES ==================== */
+  .dropzone {
+    display: block;
+    border: 2px dashed var(--line-strong);
+    border-radius: 6px;
+    padding: 32px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: var(--paper-warm);
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--drop-brand);
+    background: var(--drop-brand-wash);
+    transform: translateY(-1px);
+  }
+  .dropzone-icon {
+    font-family: var(--serif);
+    font-size: 36px;
+    font-style: italic;
+    color: var(--drop-brand);
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+  .dropzone-main {
+    font-size: 15px;
+    color: var(--ink);
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+  .dropzone-sub {
+    font-size: 13px;
+    color: var(--ink-mute);
+  }
+  .dropzone input[type=file] { display: none; }
+  .dropzone.small {
+    padding: 18px 20px;
+  }
+  .dropzone.small .dropzone-icon {
+    font-size: 24px;
+    margin-bottom: 4px;
+  }
+  .dropzone.small .dropzone-main { font-size: 14px; }
+  .dropzone.small .dropzone-sub { font-size: 12px; }
+  /* ==================== UPLOADED FILE CHIP ==================== */
+  .file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--cream);
+    border: 1px solid var(--line-strong);
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--ink);
+    margin-right: 8px;
+    margin-bottom: 6px;
+  }
+  .file-chip .vendor-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    background: var(--drop-brand);
+    color: white;
+    padding: 2px 7px;
+    border-radius: 2px;
+    font-weight: 500;
+  }
+  .file-chip.unknown .vendor-tag {
+    background: var(--bad);
+  }
+  .file-chip .x {
+    cursor: pointer;
+    color: var(--ink-mute);
+    font-size: 16px;
+    margin-left: 4px;
+    user-select: none;
+  }
+  .file-chip .x:hover { color: var(--bad); }
+  /* ==================== RESULT TABLES ==================== */
+  .vendor-result-block {
+    margin-bottom: 28px;
+    background: var(--paper-warm);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .vendor-result-head {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 14px 20px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  .vendor-result-head .vname {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-style: italic;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+  .vendor-result-head .vsummary {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: rgba(247,244,237,0.7);
+    margin-left: auto;
+  }
+  .vendor-result-head .vsummary strong { color: var(--paper); font-weight: 600; }
+  table.results {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+  }
+  table.results th {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-mute);
+    font-weight: 500;
+    text-align: left;
+    padding: 10px 16px;
+    background: var(--paper-warm);
+    border-bottom: 1px solid var(--line);
+  }
+  table.results th.num { text-align: right; }
+  table.results td {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--ink);
+    vertical-align: top;
+  }
+  table.results td.harrison {
+    font-weight: 500;
+    color: var(--ink);
+  }
+  table.results td.vendor-desc {
+    font-size: 12px;
+    color: var(--ink-mute);
+    font-family: var(--mono);
+  }
+  table.results td.matched {
+    font-size: 12px;
+    color: var(--ink-soft);
+    font-family: var(--mono);
+  }
+  table.results td.price {
+    text-align: right;
+    font-family: var(--mono);
+    font-weight: 500;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  table.results td.confidence {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  table.results tr.row-exact td.confidence { color: var(--good); }
+  table.results tr.row-fuzzy td.confidence { color: var(--warn); }
+  table.results tr.row-na td.confidence { color: var(--na); }
+  table.results tr.row-miss td.confidence { color: var(--bad); }
+  table.results tr.row-na td.price { color: var(--na); font-style: italic; }
+  table.results tr.row-miss td.price { color: var(--bad); }
+  table.results tr.row-skip td { color: var(--ink-mute); font-style: italic; }
+  table.results tr:last-child td { border-bottom: none; }
+  /* ==================== ACTION BAR ==================== */
+  .action-bar {
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 20px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: var(--shadow-md);
+    margin-top: 16px;
+  }
+  .action-summary {
+    flex: 1;
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+  .action-summary strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .action-summary .stat-line {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-mute);
+    margin-top: 4px;
+    letter-spacing: 0.02em;
+  }
+  button.btn {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 12px 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    border: 1px solid transparent;
+    line-height: 1.2;
+  }
+  button.btn-primary {
+    background: var(--brand);
+    color: white;
+    border-color: var(--brand-dark);
+    box-shadow: var(--shadow-md);
+  }
+  button.btn-primary:hover {
+    background: var(--brand-dark);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-lg);
+  }
+  button.btn-primary:disabled {
+    background: var(--cream);
+    color: var(--ink-mute);
+    border-color: var(--line);
+    box-shadow: none;
+    cursor: not-allowed;
+    transform: none;
+  }
+  button.btn-secondary {
+    background: transparent;
+    color: var(--ink-mute);
+    border-color: var(--line-strong);
+  }
+  button.btn-secondary:hover {
+    color: var(--ink);
+    border-color: var(--ink-soft);
+    background: var(--paper-warm);
+  }
+  /* ==================== MESSAGES ==================== */
+  .message {
+    padding: 14px 18px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .message.info { background: rgba(31,82,54,0.06); color: var(--brand-dark); border-left: 3px solid var(--brand); }
+  .message.warn { background: rgba(184,132,26,0.08); color: #6b4d09; border-left: 3px solid var(--warn); }
+  .message.error { background: rgba(156,44,30,0.06); color: #6a1f15; border-left: 3px solid var(--bad); }
+  .message strong { font-weight: 600; }
+  /* ==================== EMPTY STATE ==================== */
+  .empty-state {
+    text-align: center;
+    padding: 48px 20px;
+    color: var(--ink-mute);
+  }
+  .empty-state-icon {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 64px;
+    color: var(--cream);
+    line-height: 1;
+    margin-bottom: 16px;
+  }
+  .empty-state-text {
+    font-size: 14px;
+  }
+  /* ==================== HIDDEN MODE STATES ==================== */
+  .mode-section { display: none; }
+  .mode-section.active { display: block; }
+  /* ==================== PER-VENDOR CARDS (one-at-a-time mode) ==================== */
+  .vendor-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .vendor-card {
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px;
+    background: white;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    position: relative;
+  }
+  .vc-file-hidden { display: none; }
+  .vendor-card:hover {
+    border-color: var(--drop-brand);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+  .vendor-card.loaded {
+    border-color: var(--good);
+    background: rgba(31,82,54,0.03);
+  }
+  .vendor-card.loaded::after {
+    content: '✓';
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    color: var(--good);
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .vendor-card .vc-name {
+    font-family: var(--serif);
+    font-size: 20px;
+    font-style: italic;
+    font-weight: 500;
+    color: var(--drop-brand);
+    margin-bottom: 4px;
+  }
+  .vendor-card .vc-fmt {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-mute);
+    margin-bottom: 8px;
+  }
+  .vendor-card .vc-file {
+    font-size: 12px;
+    color: var(--ink-soft);
+    font-family: var(--mono);
+    word-break: break-all;
+  }
+  .vendor-card .vc-cta {
+    font-size: 12px;
+    color: var(--ink-mute);
+  }
+  /* ==================== FOOTER ==================== */
+  .colophon {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-mute);
+    letter-spacing: 0.04em;
+    display: flex;
+    justify-content: space-between;
+  }
+  /* ==================== LOADING SPINNER ==================== */
+  .spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--cream);
+    border-top-color: var(--brand);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* ==================== UTIL ==================== */
+  .hide { display: none !important; }
+  /* Responsive */
+  @media (max-width: 720px) {
+    .shell { padding: 20px 16px 40px; }
+    header.masthead { grid-template-columns: 1fr; }
+    .meta { text-align: left; }
+    .brand-mark { font-size: 40px; }
+    .step { padding: 18px 18px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- ============ MASTHEAD ============ -->
+  <header class="masthead">
+    <div class="brand">
+      <div class="brand-mark"><em>Harrison<span>'s</span></em></div>
+      <div class="brand-name">
+        Customer Operations
+        <strong>Weekly Pricing Extractor</strong>
+      </div>
+    </div>
+    <div class="meta">
+      <div class="meta-date" id="todayDate">May 29, 2026</div>
+      <div>Friday-to-Friday cycle</div>
+    </div>
+  </header>
+  <!-- ============ MODE TOGGLE ============ -->
+  <div class="mode-toggle">
+    <span class="mode-toggle-label">Workflow:</span>
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="batch">All at once</button>
+      <button class="mode-tab" data-mode="single">One at a time</button>
+    </div>
+    <span style="font-size:12px;color:var(--ink-mute);margin-left:auto;">
+      Try both — pick the rhythm that works for you.
+    </span>
+  </div>
+  <!-- ============ STEP 1: CROSS-REFERENCE ============ -->
+  <section class="step" id="step-crossref">
+    <div class="step-header">
+      <span class="step-num">i.</span>
+      <h2 class="step-title">Load your cross-reference master</h2>
+      <span class="step-status" id="crossref-status">not loaded</span>
+    </div>
+    <label class="dropzone" id="crossref-drop">
+      <input type="file" id="crossref-input" accept=".xlsx,.xls">
+      <div class="dropzone-icon"><em>↧</em></div>
+      <div class="dropzone-main">Drop your cross-reference workbook here</div>
+      <div class="dropzone-sub">e.g. <span style="font-family:var(--mono);">Weekly_Pricing_Template_*.xlsx</span> — this is the dictionary AND the destination</div>
+    </label>
+    <div id="crossref-summary" class="hide" style="margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--ink-soft);"></div>
+  </section>
+  <!-- ============ STEP 2: VENDOR FILES ============ -->
+  <section class="step" id="step-vendors">
+    <div class="step-header">
+      <span class="step-num">ii.</span>
+      <h2 class="step-title">Add this week's vendor files</h2>
+      <span class="step-status" id="vendors-status">awaiting cross-reference</span>
+    </div>
+    <!-- BATCH MODE -->
+    <div class="mode-section active" data-mode="batch">
+      <label class="dropzone" id="batch-drop">
+        <input type="file" id="batch-input" multiple="" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp">
+        <div class="dropzone-icon"><em>↧↧</em></div>
+        <div class="dropzone-main">Drop all vendor files at once</div>
+        <div class="dropzone-sub">PDFs and Excel files — vendor will be auto-detected from contents</div>
+      </label>
+      <div id="batch-chips" style="margin-top:14px;"></div>
+    </div>
+    <!-- SINGLE MODE -->
+    <div class="mode-section" data-mode="single">
+      <div style="font-size:12px;color:var(--ink-mute);margin-bottom:12px;">
+        Click any vendor below to drop in their weekly file. Process one at a time, see the result, then move on.
+      </div>
+      <div class="vendor-card-grid" id="vendor-card-grid"><div class="vendor-card" data-vendor="Fox">
+      <div class="vc-name">Fox Deluxe</div>
+      <div class="vc-fmt">PDF format</div>
+      <div class="vc-cta">Click to upload</div>
+      <input type="file" class="hide" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp" data-vendor-input="Fox">
+    </div><div class="vendor-card" data-vendor="Nealey">
+      <div class="vc-name">Nealey</div>
+      <div class="vc-fmt">PDF format</div>
+      <div class="vc-cta">Click to upload</div>
+      <input type="file" class="hide" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp" data-vendor-input="Nealey">
+    </div><div class="vendor-card" data-vendor="Cougle">
+      <div class="vc-name">Cougle</div>
+      <div class="vc-fmt">XLSX format</div>
+      <div class="vc-cta">Click to upload</div>
+      <input type="file" class="hide" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp" data-vendor-input="Cougle">
+    </div><div class="vendor-card" data-vendor="Four Star">
+      <div class="vc-name">Four Star</div>
+      <div class="vc-fmt">PDF format</div>
+      <div class="vc-cta">Click to upload</div>
+      <input type="file" class="hide" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp" data-vendor-input="Four Star">
+    </div><div class="vendor-card" data-vendor="New S.B.L">
+      <div class="vc-name">New S.B.L</div>
+      <div class="vc-fmt">XLSX / PDF format</div>
+      <div class="vc-cta">Click to upload</div>
+      <input type="file" class="hide" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp" data-vendor-input="New S.B.L">
+    </div><div class="vendor-card" data-vendor="Badger Murphy">
+      <div class="vc-name">Badger Murphy</div>
+      <div class="vc-fmt">PDF format</div>
+      <div class="vc-cta">Click to upload</div>
+      <input type="file" class="hide" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp" data-vendor-input="Badger Murphy" multiple="multiple">
+    </div></div>
+    </div>
+  </section>
+  <!-- ============ STEP 3: PREVIEW & APPLY ============ -->
+  <section class="step" id="step-preview">
+    <div class="step-header">
+      <span class="step-num">iii.</span>
+      <h2 class="step-title">Review extracted prices</h2>
+      <span class="step-status" id="preview-status">awaiting vendor files</span>
+    </div>
+    <div id="preview-content">
+      <div class="empty-state">
+        <div class="empty-state-icon"><em>✦</em></div>
+        <div class="empty-state-text">
+          Once you've loaded vendor files, extraction results will appear here for review.<br>
+          Nothing is written to your spreadsheet until you click <strong>Apply &amp; Download</strong>.
+        </div>
+      </div>
+    </div>
+    <div class="action-bar hide" id="action-bar">
+      <div class="action-summary" id="action-summary"></div>
+      <label style="font-family:var(--mono);font-size:11px;color:var(--ink-mute);letter-spacing:0.04em;display:flex;flex-direction:column;gap:4px;">
+        Save as
+        <input type="text" id="save-as" spellcheck="false"
+               style="font-family:var(--mono);font-size:13px;padding:8px 10px;border:1px solid var(--line-strong);border-radius:4px;background:white;color:var(--ink);width:230px;">
+      </label>
+      <button class="btn btn-secondary" id="btn-reset">Start over</button>
+      <button class="btn btn-primary" id="btn-apply">Apply &amp; Download</button>
+    </div>
+  </section>
+  <div class="colophon">
+    <span>Harrison's Poultry — Customer Operations</span>
+    <span>All processing happens locally in your browser. Nothing is uploaded.</span>
+  </div>
+</div>
+<script>
+/* ===================================================================
+   Harrison's Weekly Pricing Extractor — main logic
+   ===================================================================
+   This file is self-contained. Drop the cross-reference workbook AND
+   the vendor files (PDFs / XLSX) directly into the page. Everything
+   runs client-side: PDF.js parses PDFs, SheetJS reads/writes XLSX.
+   =================================================================== */
+// Configure PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+// =================== STATE ===================
+const state = {
+  mode: 'batch',
+  crossref: null,        // { workbook, fileName, vendors: {tabName: [{harrison, vendorDesc, row}]} }
+  vendorFiles: {},       // { vendorKey: { file, items: [{desc, price}], naItems: [desc], status } }
+  results: {},           // { vendorKey: [{harrison, vendorDesc, matchedDesc, price, confidence, row}] }
+};
+// =================== VENDOR REGISTRY ===================
+// Maps the vendor TAB name in the cross-reference to its display name + detection cues.
+const VENDOR_REGISTRY = {
+  'Fox':           { label: 'Fox Deluxe',    formats: ['PDF'],          detect: ['fox deluxe', 'fox de luxe'] },
+  'Nealey':        { label: 'Nealey',        formats: ['PDF'],          detect: ['nealey foods'] },
+  'Cougle':        { label: 'Cougle',        formats: ['XLSX'],         detect: ['cougle commission', 'cougle'] },
+  'Four Star':     { label: 'Four Star',     formats: ['PDF'],          detect: ['four star foods', 'fourstar'] },
+  'New S.B.L':     { label: 'New S.B.L',     formats: ['XLSX', 'PDF'],  detect: ['new s.b.l', 'new sbl', 's.b.l'] },
+  // Badger Murphy is special: vendor sends TWO weekly files (a Weekly Quote and a Price File Report).
+  // multiFile=true unlocks multi-file upload in the vendor card and merges results into one tab.
+  // Conflict rule (same product priced in both files): highest price wins, matching Cougle dup rule.
+  // excludeFromComparison=true keeps Badger Murphy out of Min/Max/Spread/Markup calculations on
+  // Summary (they sell dairy/eggs — no comparison shopping with poultry vendors). The vendor's
+  // column DOES appear on Summary; it just doesn't participate in cross-vendor metrics.
+  'Badger Murphy': { label: 'Badger Murphy', formats: ['PDF'],          detect: ['badger murphy'], multiFile: true, excludeFromComparison: true },
+};
+// =================== PRICE FALLBACKS (per vendor) ===================
+// Business rule: when a specific item can't be found in this week's vendor file, fall
+// back to a related size/product and use its price. Rules are tried in order; the first
+// fallback that matches wins. `primary` is matched as a case-insensitive substring of the
+// cross-reference's vendor description, so it only fires for the intended row.
+const MATCH_FALLBACKS = {
+  'New S.B.L': [
+    // 10oz single lobe (skinless) -> 8oz single lobe of the same name
+    { primary: 'BNLS SKLS Breast Single Lobe 10oz', fallbacks: ['Chicken BNLS SKLS Breast Single Lobe 8oz'] },
+    // 12oz single lobe -> 14oz single lobe (only 14oz single lobe in file is Skin-On)
+    { primary: 'BNLS SKLS Breast Single Lobe 12oz', fallbacks: ['Chicken BNLS Skin On Breast Single Lobe 14oz'] },
+    // 7oz Skin-On single lobe -> 5-6oz Skin-On single lobe
+    { primary: 'Skin On Breast Single Lobe - 7oz', fallbacks: ['Chicken BNLS Skin On Breast Single Lobe 5-6oz'] },
+    // 8oz Skin-On butterflied breast -> 10oz Skin-On butterflied breast
+    { primary: 'Skin On Butterflied Breast - 8 oz', fallbacks: ['Chicken BNLS Skin On Butterflied Breast 10oz'] },
+    // Skin-On Thigh Jumbo -> Skinless Thigh Jumbo (same $ price; the Skin-On line OCRs poorly)
+    { primary: 'Skin On Thigh - Jumbo', fallbacks: ['Chicken BNLS SKLS Thigh - Jumbo'] },
+  ],
+};
+// =================== UTILITIES ===================
+const $ = sel => document.querySelector(sel);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
+function setStatus(el, text, ok) {
+  el.textContent = text;
+  el.classList.toggle('ok', !!ok);
+}
+function fmtMoney(n) {
+  if (n === null || n === undefined) return '—';
+  return '$' + n.toFixed(2);
+}
+function todayString() {
+  const d = new Date();
+  const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+  return `${m} ${d.getDate()}, ${d.getFullYear()}`;
+}
+$('#todayDate').textContent = todayString();
+// Friday of the current pricing week (nearest Friday; today if it's Friday), as MMDDYYYY.
+function fridayCode() {
+  const d = new Date();
+  let diff = 5 - d.getDay();      // days to Friday (Sun=+5 .. Fri=0 .. Sat=-1)
+  if (diff > 3) diff -= 7;        // if the upcoming Friday is >3 days off, the past one is nearer
+  d.setDate(d.getDate() + diff);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}${dd}${d.getFullYear()}`;
+}
+function masterFileName() {
+  return `Master_Pricing_${fridayCode()}.xlsx`;
+}
+// ---- Latest-master auto-load (OFF until the Notion proxy is configured) -------
+// No data is stored in the browser. When you're ready, paste your Cloudflare
+// Worker URL below and the tool will auto-load the newest master from Notion.
+// Left as-is, nothing auto-loads and the cross-reference is loaded manually.
+const MASTER_SOURCE_URL = 'PASTE_YOUR_WORKER_URL_HERE';
+async function autoLoadMasterFromNotion() {
+  if (!MASTER_SOURCE_URL || MASTER_SOURCE_URL.indexOf('PASTE_') === 0) return; // disabled until configured
+  try {
+    setStatus($('#crossref-status'), 'loading latest from Notion...', false);
+    const res = await fetch(MASTER_SOURCE_URL, { cache: 'no-store' });
+    if (!res.ok) throw new Error('source responded ' + res.status);
+    const fname = res.headers.get('X-Master-Filename') || 'Master_Pricing_latest.xlsx';
+    const buf = await res.arrayBuffer();
+    const file = new File([buf], fname,
+      { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    await handleCrossReferenceFile(file, { auto: true, source: 'Notion' });
+  } catch (e) {
+    console.warn('Notion auto-load failed:', e);
+    setStatus($('#crossref-status'), 'not loaded', false);
+    $('#crossref-summary').classList.remove('hide');
+    $('#crossref-summary').innerHTML =
+      `<span style="color:var(--warn);">Couldn't auto-load the latest master from Notion - load it manually below.</span>`;
+  }
+}
+// =================== NORMALIZATION (mirrors Python) ===================
+function normalizeLoose(s) {
+  if (!s) return '';
+  let n = String(s).toLowerCase();
+  n = n.replace(/[\s\u00a0]+/g, ' ');
+  n = n.replace(/[^a-z0-9 #/.]/g, ' ');
+  n = n.replace(/\s+/g, ' ').trim();
+  // OCR-tolerance: common digit/letter confusions in oz contexts.
+  // These are no-ops on text that doesn't contain the confusable pattern, so they
+  // don't affect Fox/Nealey/Cougle/Four Star descriptions.
+  n = n.replace(/(\d)0z\b/g, '$1oz');    // "60z" → "6oz"
+  n = n.replace(/(\d)02z\b/g, '$1oz');   // "202z" → "2oz" (oz misread as 02 with trailing z artifact)
+  n = n.replace(/(\d)02\b/g, '$1oz');    // "602" → "6oz"
+  n = n.replace(/\bsoz\b/g, '5oz');      // "Soz" → "5oz" (after lowercase)
+  n = n.replace(/\bboz\b/g, '8oz');      // "Boz" → "8oz" (Tesseract often reads 8 as B before oz)
+  n = n.replace(/\bgoz\b/g, '6oz');      // "Goz" → "6oz" (Tesseract sometimes reads 6 as G before oz)
+  n = n.replace(/\btoz\b/g, '7oz');      // "Toz" → "7oz" (Tesseract often reads 7 as T before oz)
+  // OCR spurious-letter tolerance: collapse "iie" → "ie" inside words like
+  // "Butterfliied" → "Butterflied". OCR sometimes duplicates the 'i' before 'e'.
+  n = n.replace(/iie/g, 'ie');
+  // Collapse "5 oz" → "5oz" so vendor "BNLS SKLS ... 6oz" matches OCR "Single Lobe - 6 oz"
+  n = n.replace(/(\d)\s+oz\b/g, '$1oz');
+  // Crude singular/plural: trailing 's' removed for words >= 4 chars, not ending in 'ss'
+  const toks = n.split(' ').map(t => {
+    if (t.length >= 4 && t.endsWith('s') && !t.endsWith('ss')) return t.slice(0, -1);
+    return t;
+  });
+  return toks.join(' ');
+}
+function cleanDescription(desc) {
+  if (!desc) return '';
+  desc = desc.trim();
+  // Strip leading code if it has no '.' or '#' (preserves size prefixes)
+  const m = desc.match(/^([A-Z]*\d+[A-Z0-9/]*)\s+(.+)$/);
+  if (m) {
+    const leading = m[1];
+    const rest = m[2];
+    if (!leading.includes('.') && !leading.includes('#')) {
+      return rest.trim();
+    }
+  }
+  // Strip trailing code
+  return desc.replace(/\s+[A-Z]?\d{4,6}[A-Z0-9/]*\s*$/, '').trim();
+}
+const HEADER_PREFIXES = [
+  'item','qty','number','description','class','fox de','company','store',
+  'del. date','price list','phone','fax','all prices','nealey foods','prices may'
+];
+function isHeaderLine(s) {
+  const l = s.toLowerCase();
+  return HEADER_PREFIXES.some(p => l.startsWith(p));
+}
+// =================== MATCHING (mirrors Python find_price) ===================
+function findPrice(vendorDesc, pricedItems, naItems, opts) {
+  opts = opts || {};
+  if (!vendorDesc) return null;
+  const target = normalizeLoose(vendorDesc);
+  if (!target) return null;
+  const idxPriced = pricedItems.map(it => ({ n: normalizeLoose(it.desc), d: it.desc, p: it.price }));
+  const idxNa     = naItems.map(d => ({ n: normalizeLoose(d), d }));
+  // 1. EXACT priced (highest price wins)
+  let exact = idxPriced.filter(x => x.n === target);
+  if (exact.length) {
+    exact.sort((a,b) => b.p - a.p);
+    return { confidence: 'exact', matchedDesc: exact[0].d, price: exact[0].p };
+  }
+  // 1b. EXACT N/A
+  let exactNa = idxNa.filter(x => x.n === target);
+  if (exactNa.length) {
+    return { confidence: 'na', matchedDesc: exactNa[0].d, price: null };
+  }
+  // 2. starts-with (priced)
+  let sw = idxPriced.filter(x => x.n.startsWith(target + ' '));
+  if (sw.length) {
+    sw.sort((a,b) => (a.d.length - b.d.length) || (b.p - a.p));
+    return { confidence: 'starts-with', matchedDesc: sw[0].d, price: sw[0].p };
+  }
+  // 2b. starts-with (N/A)
+  let swNa = idxNa.filter(x => x.n.startsWith(target + ' '));
+  if (swNa.length) {
+    swNa.sort((a,b) => a.d.length - b.d.length);
+    return { confidence: 'na', matchedDesc: swNa[0].d, price: null };
+  }
+  // 3. item-prefix-of-target (priced)
+  let ipt = idxPriced.filter(x => target.startsWith(x.n + ' ') && x.n.length >= 0.8 * target.length);
+  if (ipt.length) {
+    ipt.sort((a,b) => (b.n.length - a.n.length) || (b.p - a.p));
+    return { confidence: 'item-prefix-of-target', matchedDesc: ipt[0].d, price: ipt[0].p };
+  }
+  // 3b. ipt N/A
+  let iptNa = idxNa.filter(x => target.startsWith(x.n + ' ') && x.n.length >= 0.8 * target.length);
+  if (iptNa.length) {
+    iptNa.sort((a,b) => b.n.length - a.n.length);
+    return { confidence: 'na', matchedDesc: iptNa[0].d, price: null };
+  }
+  // 4. contains (priced — only for substantial targets)
+  if (target.length > 8) {
+    let ct = idxPriced.filter(x => x.n.includes(target));
+    if (ct.length) {
+      ct.sort((a,b) => Math.abs(a.n.length - target.length) - Math.abs(b.n.length - target.length) || (b.p - a.p));
+      return { confidence: 'contains', matchedDesc: ct[0].d, price: ct[0].p };
+    }
+    let ctNa = idxNa.filter(x => x.n.includes(target));
+    if (ctNa.length) {
+      ctNa.sort((a,b) => Math.abs(a.n.length - target.length) - Math.abs(b.n.length - target.length));
+      return { confidence: 'na', matchedDesc: ctNa[0].d, price: null };
+    }
+  }
+  // 5. token-subset (OCR-tolerant): every token of the target must appear in a candidate
+  // (extra tokens allowed — that's the leftover OCR junk). Pick the candidate with the
+  // FEWEST extra tokens (closest match), highest price on ties. Because every target
+  // token — including the size, e.g. "8oz" — must be present, this can't match the wrong
+  // size or product type (breast vs thigh, single lobe vs butterflied).
+  const ttoks = target.split(' ').filter(Boolean);
+  if (ttoks.length >= 3) {
+    const cand = idxPriced
+      .map(x => ({ d: x.d, p: x.p, ct: x.n.split(' ').filter(Boolean) }))
+      .filter(x => ttoks.every(tk => x.ct.includes(tk)))
+      .map(x => ({ ...x, extra: x.ct.length - ttoks.length }));
+    if (cand.length) {
+      cand.sort((a,b) => (a.extra - b.extra) || (b.p - a.p));
+      return { confidence: 'token-subset', matchedDesc: cand[0].d, price: cand[0].p };
+    }
+    const candNa = idxNa
+      .map(x => ({ d: x.d, ct: x.n.split(' ').filter(Boolean) }))
+      .filter(x => ttoks.every(tk => x.ct.includes(tk)));
+    if (candNa.length) {
+      candNa.sort((a,b) => a.ct.length - b.ct.length);
+      return { confidence: 'na', matchedDesc: candNa[0].d, price: null };
+    }
+  }
+  // 6. truncation-prefix (Fox Deluxe price-report only): that report hard-truncates
+  //    Description Line 1 to ~20 chars, so the report description is a leading fragment of
+  //    the fuller cross-reference description. Accept a candidate whose normalized text is a
+  //    prefix of the target, provided it is substantial -- at least 6 chars AND at least 60%
+  //    of the target length -- so a short fragment can't match the wrong product. Longest
+  //    (most specific) prefix wins; highest price breaks ties. Gated behind opts.truncPrefix
+  //    so no other vendor or file format is affected.
+  if (opts.truncPrefix) {
+    const tp = idxPriced.filter(x => x.n.length >= 6 && x.n.length >= 0.6 * target.length && target.startsWith(x.n));
+    if (tp.length) {
+      tp.sort((a,b) => (b.n.length - a.n.length) || (b.p - a.p));
+      return { confidence: 'trunc-prefix', matchedDesc: tp[0].d + '  (truncated \u2190 full desc)', price: tp[0].p };
+    }
+  }
+  return null;
+}
+// Try the exact match first; if nothing is found, apply any per-vendor fallback rules
+// (e.g. substitute a nearby size). Returns the same shape as findPrice, tagging fallback
+// matches so they're visible in the preview.
+function findPriceWithFallback(vendorKey, vendorDesc, priced, na, opts) {
+  const direct = findPrice(vendorDesc, priced, na, opts);
+  if (direct) return direct;
+  const rules = MATCH_FALLBACKS[vendorKey] || [];
+  const hay = String(vendorDesc || '').toLowerCase();
+  for (const rule of rules) {
+    if (!hay.includes(String(rule.primary).toLowerCase())) continue;
+    for (const fb of rule.fallbacks) {
+      const m = findPrice(fb, priced, na, opts);
+      if (m && m.price !== null && m.price !== undefined) {
+        return { confidence: 'fallback', price: m.price, matchedDesc: m.matchedDesc + '  (fallback ← ' + fb + ')' };
+      }
+    }
+  }
+  return null;
+}
+// =================== PDF PARSING ===================
+async function readPdfText(file) {
+  const ab = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data: ab}).promise;
+  let allLines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    // Collect all text fragments with x, y position
+    const frags = tc.items
+      .filter(it => it.str && it.str.length)
+      .map(it => ({
+        x: it.transform[4],
+        y: it.transform[5],
+        w: it.width || (it.str.length * 4.5),
+        str: it.str,
+      }));
+    // Cluster by y-coordinate with tolerance (PDF rendering misaligns by 1-2px within a row)
+    // Sort by y descending (top-down), then group fragments within Y_TOL of each other
+    const Y_TOL = 2.5;  // pixels of vertical jitter allowed within one logical line
+    frags.sort((a, b) => b.y - a.y);
+    const groups = [];
+    for (const f of frags) {
+      // Find an existing group whose mean-y is within tolerance
+      let g = null;
+      for (const cand of groups) {
+        if (Math.abs(cand.meanY - f.y) <= Y_TOL) { g = cand; break; }
+      }
+      if (!g) {
+        g = { meanY: f.y, items: [] };
+        groups.push(g);
+      } else {
+        // Update mean-y as a running average
+        g.meanY = (g.meanY * g.items.length + f.y) / (g.items.length + 1);
+      }
+      g.items.push(f);
+    }
+    // Sort groups top-down (already sorted by initial f.y descending; resort to be safe)
+    groups.sort((a, b) => b.meanY - a.meanY);
+    for (const g of groups) {
+      // Sort items left-to-right
+      g.items.sort((a, b) => a.x - b.x);
+      // Reassemble line, padding with spaces proportional to x gaps
+      let line = '';
+      let prevEnd = null;
+      for (const it of g.items) {
+        if (prevEnd === null) {
+          line = it.str;
+        } else {
+          const gap = it.x - prevEnd;
+          // Use character width ~4.5 pixels as the spacing unit
+          const spaceCount = gap > 4 ? Math.max(1, Math.min(16, Math.round(gap / 4))) : (gap > 1 ? 1 : 0);
+          line += ' '.repeat(spaceCount) + it.str;
+        }
+        prevEnd = it.x + it.w;
+      }
+      allLines.push(line);
+    }
+  }
+  return allLines.join('\n');
+}
+// =================== FOX DELUXE PRICE-REPORT PARSER ===================
+// Fox Deluxe can send a fixed-width columnar "Customer Special Price Report" (generated by
+// their back-office software, whose footer reads "Generated by entree ... by NECS") instead
+// of their usual price sheet. This is Fox Deluxe ONLY -- not a new vendor. It is a digital
+// (text) PDF whose columns sit at stable left-x positions:
+//   S/P flag (~48) | Item Number (~68) | Description Line 1 (~122) | Pack Size (~248) |
+//   Class Name (~314) | Unit of Measure (~380) | Unit Price (~460, right-aligned)
+// The Description Line 1 field is HARD-TRUNCATED to ~20 chars by the report, so exact/token
+// matching against the (fuller) cross-reference descriptions won't work -- the truncation-prefix
+// tier in findPrice() (enabled via opts.truncPrefix) bridges that gap. Parsing by column x keeps
+// the description clean (no pack/class/uom bleed), which the collapsed-text parser cannot do.
+function isFoxPriceReport(text) {
+  const t = (text || '').toLowerCase();
+  if (t.includes('customer special price report')) return true;
+  if (t.includes('generated by entr') && t.includes('necs')) return true;
+  // Structural fallback: the report's two-line column header.
+  return t.includes('s/p') && t.includes('item number') && t.includes('unit price') && t.includes('class');
+}
+// Column left-edge x boundaries. Generous margins so minor layout drift between report
+// versions still lands each fragment in the right column.
+const FOX_REPORT_COLS = { itemMin: 60, descMin: 118, packMin: 245, priceMin: 440 };
+async function extractItemsFromFoxReportPdf(file) {
+  const ab = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+  const priced = [];
+  const na = [];
+  const Y_TOL = 2.5;
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    const frags = tc.items
+      .filter(it => it.str && it.str.trim().length)
+      .map(it => ({ x: it.transform[4], y: it.transform[5], str: it.str }));
+    // Cluster fragments into visual rows by y-coordinate (same approach as readPdfText).
+    frags.sort((a, b) => b.y - a.y);
+    const groups = [];
+    for (const f of frags) {
+      let g = null;
+      for (const cand of groups) { if (Math.abs(cand.meanY - f.y) <= Y_TOL) { g = cand; break; } }
+      if (!g) { g = { meanY: f.y, items: [] }; groups.push(g); }
+      else { g.meanY = (g.meanY * g.items.length + f.y) / (g.items.length + 1); }
+      g.items.push(f);
+    }
+    for (const g of groups) {
+      g.items.sort((a, b) => a.x - b.x);
+      const first = g.items[0];
+      // A data row starts with a lone S/P flag (Y or N) in the far-left column.
+      if (!first || first.x >= FOX_REPORT_COLS.itemMin || !/^[YN]$/i.test(first.str.trim())) continue;
+      const descParts = [];
+      let priceStr = null;
+      for (const it of g.items) {
+        const s = it.str.trim();
+        if (!s) continue;
+        if (it.x >= FOX_REPORT_COLS.descMin && it.x < FOX_REPORT_COLS.packMin) {
+          descParts.push(s);                       // Description Line 1 (may be several fragments)
+        } else if (it.x >= FOX_REPORT_COLS.priceMin) {
+          const m = s.match(/(\d+\.\d{2,4})/);      // Unit Price (right-most column)
+          if (m) priceStr = m[1];
+        }
+      }
+      const desc = descParts.join(' ').replace(/\s+/g, ' ').trim();
+      if (!desc || desc.length < 2) continue;
+      if (priceStr !== null) {
+        const price = parseFloat(priceStr);
+        if (price > 0.01 && price < 5000) priced.push({ desc, price });
+      }
+      // No N/A markers appear in this report format; rows without a price are simply skipped.
+    }
+  }
+  return { priced, na };
+}
+// =================== OCR PIPELINE (for image-only PDFs and PNG/JPG) ===================
+// Used for vendors like New S.B.L who send pricing as a screenshot pasted into a PDF
+// wrapper, or as a direct PNG/JPG. Workflow:
+//   1. Render PDF page to canvas at 2x (or load image straight into canvas)
+//   2. Boost contrast via canvas pixel manipulation (yellow highlights defeat default OCR)
+//   3. Feed canvas to Tesseract.recognize
+//   4. Return concatenated text from all pages
+//
+// Tesseract is loaded from CDN — first OCR call triggers a ~13MB language model
+// download. Subsequent calls use the cached worker.
+let _tesseractWorker = null;  // singleton across the session
+async function getTesseractWorker(progressCb) {
+  if (_tesseractWorker) return _tesseractWorker;
+  if (typeof Tesseract === 'undefined') {
+    throw new Error('Tesseract.js failed to load. Check your network — the tool needs CDN access.');
+  }
+  if (progressCb) progressCb('Loading OCR engine (first run only, ~13MB)...');
+  _tesseractWorker = await Tesseract.createWorker('eng', 1, {
+    logger: m => {
+      if (progressCb && m.status === 'recognizing text') {
+        progressCb(`OCR scanning page: ${Math.round(m.progress * 100)}%`);
+      }
+    },
+  });
+  // Page segmentation mode 6 = assume a single uniform block of text. The vendor
+  // price lists are simple single-column tables; PSM 6 is far more accurate on them
+  // than the default auto mode (which fragments rows and garbles pack-size tokens).
+  try { await _tesseractWorker.setParameters({ tessedit_pageseg_mode: '6' }); } catch (e) { console.warn('PSM set failed', e); }
+  return _tesseractWorker;
+}
+// Mirror of ImageMagick `convert -colorspace Gray -level 30%,80%` — converts to
+// grayscale and clamps the contrast range so faint yellow-highlighted text becomes
+// readable black-on-white before OCR. Mutates the imageData in place.
+function boostContrast(imageData, lowPct = 0.30, highPct = 0.80) {
+  const data = imageData.data;
+  const lowByte = lowPct * 255;
+  const highByte = highPct * 255;
+  const range = highByte - lowByte;
+  for (let i = 0; i < data.length; i += 4) {
+    // Convert to grayscale (luminance-weighted)
+    const r = data[i], g = data[i+1], b = data[i+2];
+    let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    // Linear stretch: anything <lowByte → 0, anything >highByte → 255, between → scaled
+    let out;
+    if (gray <= lowByte) out = 0;
+    else if (gray >= highByte) out = 255;
+    else out = Math.round(((gray - lowByte) / range) * 255);
+    data[i] = data[i+1] = data[i+2] = out;
+    // alpha unchanged
+  }
+}
+async function renderPdfPageToCanvas(pdf, pageNum, scale = 2.0) {
+  const page = await pdf.getPage(pageNum);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  // Apply contrast boost
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  boostContrast(imageData);
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+async function loadImageToCanvas(file) {
+  // Load PNG/JPG into a canvas, then apply contrast boost
+  const blobUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = blobUrl;
+    });
+    const canvas = document.createElement('canvas');
+    // Scale up small images to improve OCR accuracy (cap at 2400px)
+    const targetMin = 1200;
+    const scale = (img.width < targetMin) ? Math.min(2400 / img.width, 3.0) : 1.0;
+    canvas.width = img.width * scale;
+    canvas.height = img.height * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    boostContrast(imageData);
+    ctx.putImageData(imageData, 0, 0);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+// Main OCR entry point. Returns plain text (one line per visible row in the image).
+async function ocrFileToText(file, progressCb) {
+  const name = file.name.toLowerCase();
+  const isPdf = name.endsWith('.pdf');
+  const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
+  if (!isPdf && !isImg) {
+    throw new Error(`OCR not supported for file type: ${file.name}`);
+  }
+  const worker = await getTesseractWorker(progressCb);
+  const pages = [];
+  if (isPdf) {
+    const ab = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+    for (let p = 1; p <= pdf.numPages; p++) {
+      if (progressCb) progressCb(`Rendering PDF page ${p}/${pdf.numPages} for OCR...`);
+      const canvas = await renderPdfPageToCanvas(pdf, p, 3.0);
+      if (progressCb) progressCb(`OCR scanning page ${p}/${pdf.numPages}...`);
+      const result = await worker.recognize(canvas);
+      pages.push(result.data.text);
+    }
+  } else {
+    if (progressCb) progressCb(`Preparing image for OCR...`);
+    const canvas = await loadImageToCanvas(file);
+    if (progressCb) progressCb(`OCR scanning image...`);
+    const result = await worker.recognize(canvas);
+    pages.push(result.data.text);
+  }
+  if (progressCb) progressCb(`OCR complete.`);
+  return pages.join('\n');
+}
+// Detects whether a PDF has zero (or essentially zero) extractable text — meaning
+// it's image-only and needs OCR to read. Returns true if the PDF is image-only.
+async function isImageOnlyPdf(file) {
+  try {
+    const ab = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+    let totalFragments = 0;
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      totalFragments += tc.items.filter(it => it.str && it.str.trim().length).length;
+      if (totalFragments >= 5) return false;  // shortcut: 5+ fragments = clearly has text
+    }
+    return totalFragments < 5;
+  } catch (e) {
+    return false;
+  }
+}
+function extractItemsFromPdfText(text, opts) {
+  opts = opts || {};
+  const isOcr = !!opts.ocr;  // when true, apply OCR-specific cleanups before matching
+  const priced = [];
+  const na = [];
+  // In OCR mode, REQUIRE a $ prefix to avoid catching weight fractions like "1.5-2oz".
+  // Vendor screenshots (the only OCR source so far) always have $ on prices.
+  // Most vendors use 2-decimal precision ($1.55). Badger Murphy uses 4 ($2.4450).
+  // Allow 2-4 decimals; rounded to 2 places only on display, full precision preserved internally.
+  const priceRe = isOcr
+    ? /\$\s*(\d+\.\d{2,4})(?![\d.#a-zA-Z])/g
+    : /(?<![\d.])\$?\s*(\d+\.\d{2,4})(?![\d.#a-zA-Z])/g;
+  const naRe = /\bN\/?A\b/gi;
+  for (const raw of text.split('\n')) {
+    let line = raw.replace(/\f/g, '').replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    if (isOcr) {
+      // SBL pack-size suffixes appear right before the price ("1/40# CVP", "1/408 Bulk",
+      // "1/40#CVP", etc). OCR commonly turns "#" into "8" so we allow either.
+      // Strip everything from "1/40" through the trailing unit/wrapping word before the
+      // price, leaving the description clean.
+      line = line.replace(/\s*1\s*\/\s*4[0o][^$]*?(?=\s*\$|\s*\d{1,3}\.\d{2,4}\s*$|\s*$)/gi, ' ');
+      // Some lines have a CVP / Non CVP tag in the middle of the description without
+      // a pack-size; strip those when they come right before the price.
+      line = line.replace(/\s+(CvP|Non CVP|CVP|Bulk)\s+(?=\$)/g, ' ');
+      // CRITICAL OCR FIX: Tesseract.js often reads "$" as "5" before prices.
+      // Pattern "5X.XX" at end of line (after whitespace) where X.XX is plausibly a price
+      // is almost always a misread $. Restricted to end-of-line to avoid false hits on
+      // real numbers embedded in descriptions like "1.5-2oz".
+      line = line.replace(/(\s)5(\d{1,2}\.\d{2,4})(\s*)$/g, '$1$$$2$3');
+      // OCR confusables for oz/digit. "60z" → "6oz", "Soz" → "5oz", "602" → "6oz"
+      line = line.replace(/(\d)0z\b/g, '$1oz');
+      line = line.replace(/(\d)02z\b/g, '$1oz');  // "202z" → "2oz"
+      line = line.replace(/(\d)02\b/g, '$1oz');
+      line = line.replace(/\bSoz\b/g, '5oz');
+      line = line.replace(/\bBoz\b/g, '8oz');   // "Boz" → "8oz" (8 misread as B)
+      line = line.replace(/\bGoz\b/g, '6oz');   // "Goz" → "6oz" (6 misread as G)
+      line = line.replace(/\bToz\b/g, '7oz');   // "Toz" → "7oz" (7 misread as T)
+      // Collapse "5 oz" → "5oz" so it matches the cross-reference normalizer's
+      // 6oz / 5oz / etc. token shape
+      line = line.replace(/(\d)\s+oz\b/g, '$1oz');
+    }
+    // Collect all markers (price and N/A) with positions
+    const markers = [];
+    let m;
+    priceRe.lastIndex = 0;
+    while ((m = priceRe.exec(line)) !== null) {
+      const price = parseFloat(m[1]);
+      if (price > 0.01 && price < 500) {
+        markers.push({ start: m.index, end: m.index + m[0].length, type: 'price', val: price });
+      }
+    }
+    naRe.lastIndex = 0;
+    while ((m = naRe.exec(line)) !== null) {
+      markers.push({ start: m.index, end: m.index + m[0].length, type: 'na', val: null });
+    }
+    // OCR fallback: Tesseract frequently drops or garbles the leading '$'. If a product
+    // line has no detected price, accept a trailing decimal (e.g. "... 2.85" at line end,
+    // after the pack size was stripped above) as the price. Anchored to end-of-line and
+    // 2-4 decimals so it can't catch a size fragment mid-description.
+    if (isOcr && !markers.some(mk => mk.type === 'price')) {
+      const tail = /(?<![\d.])(\d{1,3}\.\d{2,4})\s*$/.exec(line);
+      if (tail) {
+        const tp = parseFloat(tail[1]);
+        if (tp > 0.01 && tp < 500) {
+          markers.push({ start: tail.index, end: line.length, type: 'price', val: tp });
+        }
+      }
+    }
+    if (!markers.length) continue;
+    markers.sort((a,b) => a.start - b.start);
+    let lastEnd = 0;
+    for (const mk of markers) {
+      const descRaw = line.substring(lastEnd, mk.start).trim();
+      const desc = cleanDescription(descRaw);
+      if (desc && desc.length >= 3 && !isHeaderLine(desc)) {
+        if (mk.type === 'price') {
+          priced.push({ desc, price: mk.val });
+        } else {
+          na.push(desc);
+        }
+      }
+      lastEnd = mk.end;
+    }
+  }
+  return { priced, na };
+}
+// =================== XLSX VENDOR PARSING ===================
+function extractItemsFromXlsxVendor(workbook, vendorTab) {
+  // Generic: scan every sheet, look for description-price pairs in adjacent cells
+  // Also detect "N/A" strings as N/A markers
+  const priced = [];
+  const na = [];
+  for (const sheetName of workbook.SheetNames) {
+    const ws = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+    for (const row of rows) {
+      // Walk pairs: desc at col i, price candidate at col i+1, i+2
+      for (let i = 0; i < row.length - 1; i++) {
+        const desc = row[i];
+        if (typeof desc !== 'string' || desc.trim().length < 3) continue;
+        const descTrim = desc.trim();
+        for (let j = i + 1; j < Math.min(i + 3, row.length); j++) {
+          const val = row[j];
+          if (typeof val === 'number' && val > 0.01 && val < 500) {
+            priced.push({ desc: descTrim, price: val });
+            break;
+          } else if (typeof val === 'string') {
+            const v = val.trim().toLowerCase();
+            if (v === 'n/a' || v === 'na') {
+              na.push(descTrim);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return { priced, na };
+}
+// =================== VENDOR DETECTION ===================
+async function detectVendor(file) {
+  const isXlsx = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls');
+  const isPdf = file.name.toLowerCase().endsWith('.pdf');
+  let snippet = '';
+  if (isPdf) {
+    try {
+      // Read just enough of the PDF to detect vendor
+      const ab = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+      const page1 = await pdf.getPage(1);
+      const tc = await page1.getTextContent();
+      snippet = tc.items.map(i => i.str).join(' ').toLowerCase();
+    } catch (e) { return null; }
+  } else if (isXlsx) {
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab, { type: 'array' });
+      const allText = [];
+      for (const name of wb.SheetNames) {
+        const ws = wb.Sheets[name];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        for (const row of rows.slice(0, 15)) {
+          allText.push(row.map(c => String(c || '')).join(' '));
+        }
+      }
+      snippet = allText.join(' ').toLowerCase();
+    } catch (e) { return null; }
+  }
+  for (const [tabName, info] of Object.entries(VENDOR_REGISTRY)) {
+    for (const cue of info.detect) {
+      if (snippet.includes(cue)) return tabName;
+    }
+  }
+  return null;
+}
+// =================== CROSS-REFERENCE LOADING ===================
+// Legacy tab name aliases — accept old spellings transparently and treat them as
+// the canonical vendor key. Lets a master that pre-dates a vendor rename continue
+// to work as cross-reference without anyone having to manually rename tabs.
+const TAB_NAME_ALIASES = {
+  'Nealy': 'Nealey',  // typo fix — original tab was misspelled
+};
+async function loadCrossReference(file) {
+  const ab = await file.arrayBuffer();
+  const wb = XLSX.read(ab, { type: 'array', cellStyles: true, cellNF: true });
+  const vendors = {};
+  for (const sheetName of wb.SheetNames) {
+    // Resolve legacy/aliased tab names to their canonical key
+    const tabName = TAB_NAME_ALIASES[sheetName] || sheetName;
+    if (!VENDOR_REGISTRY[tabName]) continue;
+    const ws = wb.Sheets[sheetName];
+    // === Discover or create the Prior / Current / % Change column structure ===
+    // Strategy: scan row 1 for headers. Match by case-insensitive substring.
+    let priorCol = null, currCol = null, changeCol = null, legacyCostCol = null;
+    let manualOverrideCol = null;  // optional: when present, skip rows marked in this column
+    const headerRange = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    for (let c = headerRange.s.c; c <= headerRange.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+      if (!cell || cell.v == null) continue;
+      const h = String(cell.v).trim().toLowerCase();
+      if (h.includes('prior') && priorCol === null) priorCol = c;
+      else if (h.includes('current') && currCol === null) currCol = c;
+      else if (h.includes('change') && changeCol === null) changeCol = c;
+      else if (h === 'cost' || h.startsWith('cost')) legacyCostCol = c;
+      else if (h.includes('manual') || h.includes('override')) manualOverrideCol = c;
+    }
+    // Migration path: legacy single "Cost" column → rename to Current Week, add Prior + % Change
+    if (currCol === null && legacyCostCol !== null) {
+      // Step 1: rename the Cost header to Current Week
+      const costHeaderAddr = XLSX.utils.encode_cell({ r: 0, c: legacyCostCol });
+      ws[costHeaderAddr] = { ...ws[costHeaderAddr], t: 's', v: 'Current Week' };
+      currCol = legacyCostCol;
+    }
+    // If we still don't have a current column at all (truly fresh tab), default to column C
+    if (currCol === null) currCol = 2;
+    // Insert a Prior Week column to the LEFT of Current Week if missing
+    if (priorCol === null) {
+      // Shift everything at currCol and beyond one column to the right
+      const newRange = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+      const shiftCells = [];
+      Object.keys(ws).forEach(k => {
+        if (k.startsWith('!')) return;
+        const addr = XLSX.utils.decode_cell(k);
+        if (addr.c >= currCol) shiftCells.push({ oldKey: k, addr });
+      });
+      // Sort right-to-left so we don't overwrite as we shift
+      shiftCells.sort((a, b) => b.addr.c - a.addr.c);
+      for (const { oldKey, addr } of shiftCells) {
+        const newAddr = XLSX.utils.encode_cell({ r: addr.r, c: addr.c + 1 });
+        ws[newAddr] = ws[oldKey];
+        delete ws[oldKey];
+      }
+      // Add the Prior Week header
+      priorCol = currCol;
+      currCol += 1;
+      if (changeCol !== null && changeCol >= priorCol) changeCol += 1;
+      ws[XLSX.utils.encode_cell({ r: 0, c: priorCol })] = { t: 's', v: 'Prior Week' };
+      // Apply currency format to all data rows in the new Prior column
+      for (let r = 1; r <= newRange.e.r; r++) {
+        const addr = XLSX.utils.encode_cell({ r, c: priorCol });
+        if (!ws[addr]) ws[addr] = { t: 's', v: '', z: '"$"#,##0.00' };
+      }
+      // Expand the range
+      newRange.e.c = Math.max(newRange.e.c + 1, priorCol);
+      ws['!ref'] = XLSX.utils.encode_range(newRange);
+    }
+    // Add % Change column to the RIGHT of Current Week if missing
+    if (changeCol === null) {
+      changeCol = currCol + 1;
+      // If something else lives there, push it right
+      const probe = ws[XLSX.utils.encode_cell({ r: 0, c: changeCol })];
+      if (probe && probe.v != null) {
+        // Same kind of shift, this time at changeCol
+        const newRange = XLSX.utils.decode_range(ws['!ref']);
+        const shiftCells = [];
+        Object.keys(ws).forEach(k => {
+          if (k.startsWith('!')) return;
+          const addr = XLSX.utils.decode_cell(k);
+          if (addr.c >= changeCol) shiftCells.push({ oldKey: k, addr });
+        });
+        shiftCells.sort((a, b) => b.addr.c - a.addr.c);
+        for (const { oldKey, addr } of shiftCells) {
+          const newAddr = XLSX.utils.encode_cell({ r: addr.r, c: addr.c + 1 });
+          ws[newAddr] = ws[oldKey];
+          delete ws[oldKey];
+        }
+        newRange.e.c += 1;
+        ws['!ref'] = XLSX.utils.encode_range(newRange);
+      }
+      ws[XLSX.utils.encode_cell({ r: 0, c: changeCol })] = { t: 's', v: '% Change' };
+      // Expand range if needed
+      const newRange = XLSX.utils.decode_range(ws['!ref']);
+      if (newRange.e.c < changeCol) {
+        newRange.e.c = changeCol;
+        ws['!ref'] = XLSX.utils.encode_range(newRange);
+      }
+    }
+    // === Now collect the Harrison product / vendor description entries ===
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+    const entries = [];
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row || !row[0]) continue;
+      const harrison = String(row[0]).trim();
+      const vendorDesc = row[1] == null ? '' : String(row[1]).trim();
+      // Manual override: if the cross-ref marks this row as manual-pricing, capture
+      // the flag so we can skip writing a value into Current Week during extraction.
+      // Truthy values: "yes", "y", "true", "1", "x" (case-insensitive). Empty/blank = not flagged.
+      let manualOverride = false;
+      if (manualOverrideCol !== null) {
+        const moVal = row[manualOverrideCol];
+        if (moVal != null && moVal !== '') {
+          const s = String(moVal).trim().toLowerCase();
+          manualOverride = (s === 'yes' || s === 'y' || s === 'true' || s === '1' || s === 'x');
+        }
+      }
+      entries.push({
+        harrison,
+        vendorDesc: (vendorDesc === '' || vendorDesc === '-') ? null : vendorDesc,
+        manualOverride,
+        row: r + 1,  // 1-indexed sheet row
+      });
+    }
+    vendors[tabName] = {
+      entries,
+      priorCol,
+      currCol,
+      changeCol,
+      manualOverrideCol,
+    };
+  }
+  return { workbook: wb, fileName: file.name, vendors };
+}
+// =================== EXTRACTION (per vendor) ===================
+async function extractFromVendorFile(vendorKey, file, progressCb) {
+  let pricedItems = [];
+  let naItems = [];
+  let foxReport = false;
+  const name = file.name.toLowerCase();
+  const isPdf = name.endsWith('.pdf');
+  const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
+  if (isPdf) {
+    // Text extraction first — fast path for normal PDFs
+    const text = await readPdfText(file);
+    // If the PDF returned essentially no text, it's image-only — fall back to OCR
+    const fragCount = text.split(/\s+/).filter(t => t.length).length;
+    if (fragCount < 5) {
+      if (progressCb) progressCb('PDF has no extractable text — running OCR (this can take 30–60s)...');
+      const ocrText = await ocrFileToText(file, progressCb);
+      const out = extractItemsFromPdfText(ocrText, { ocr: true });
+      pricedItems = out.priced; naItems = out.na;
+    } else if (isFoxPriceReport(text)) {
+      // Fox Deluxe fixed-width "Customer Special Price Report". Parse by column x-position
+      // so descriptions stay clean, and enable truncation-tolerant matching downstream.
+      if (progressCb) progressCb('Detected Fox Deluxe price report layout \u2014 parsing columns...');
+      const out = await extractItemsFromFoxReportPdf(file);
+      pricedItems = out.priced; naItems = out.na;
+      foxReport = true;
+    } else {
+      const out = extractItemsFromPdfText(text);
+      pricedItems = out.priced; naItems = out.na;
+    }
+  } else if (isImg) {
+    if (progressCb) progressCb('Image file — running OCR (this can take 30–60s)...');
+    const ocrText = await ocrFileToText(file, progressCb);
+    const out = extractItemsFromPdfText(ocrText, { ocr: true });
+    pricedItems = out.priced; naItems = out.na;
+  } else {
+    const ab = await file.arrayBuffer();
+    const wb = XLSX.read(ab, { type: 'array' });
+    const out = extractItemsFromXlsxVendor(wb, vendorKey);
+    pricedItems = out.priced; naItems = out.na;
+  }
+  // Now match each cross-ref entry for this vendor
+  const vendorData = state.crossref.vendors[vendorKey] || { entries: [] };
+  const refEntries = vendorData.entries || [];
+  const results = [];
+  const matchOpts = foxReport ? { truncPrefix: true } : {};
+  for (const entry of refEntries) {
+    // Manual override: skip extraction entirely for this row. The cross-reference
+    // has flagged it as manually entered (e.g. vendor sends special pricing via
+    // separate email). Leave Current Week blank so the user can type the real value.
+    if (entry.manualOverride) {
+      results.push({
+        harrison: entry.harrison,
+        vendorDesc: entry.vendorDesc,
+        matchedDesc: null,
+        price: null,
+        confidence: 'manual-override',
+        manualOverride: true,
+        row: entry.row,
+      });
+      continue;
+    }
+    if (!entry.vendorDesc) {
+      results.push({
+        harrison: entry.harrison,
+        vendorDesc: null,
+        matchedDesc: null,
+        price: null,
+        confidence: 'no-vendor-desc',
+        row: entry.row,
+      });
+      continue;
+    }
+    const match = findPriceWithFallback(vendorKey, entry.vendorDesc, pricedItems, naItems, matchOpts);
+    if (!match) {
+      results.push({
+        harrison: entry.harrison,
+        vendorDesc: entry.vendorDesc,
+        matchedDesc: null,
+        price: null,
+        confidence: 'not-found',
+        row: entry.row,
+      });
+    } else {
+      results.push({
+        harrison: entry.harrison,
+        vendorDesc: entry.vendorDesc,
+        matchedDesc: match.matchedDesc,
+        price: match.price,
+        confidence: match.confidence,
+        row: entry.row,
+      });
+    }
+  }
+  return { pricedItems, naItems, results, foxReport };
+}
+// =================== UI: PREVIEW RENDERING ===================
+function renderPreview() {
+  const container = $('#preview-content');
+  const actionBar = $('#action-bar');
+  if (!Object.keys(state.results).length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon"><em>✦</em></div>
+        <div class="empty-state-text">
+          Once you've loaded vendor files, extraction results will appear here for review.<br>
+          You'll see prior vs current prices side by side, with anything ≥10% change flagged.<br>
+          Nothing is written to your spreadsheet until you click <strong>Apply &amp; Download</strong>.
+        </div>
+      </div>`;
+    actionBar.classList.add('hide');
+    setStatus($('#preview-status'), 'awaiting vendor files', false);
+    return;
+  }
+  let html = '';
+  let totalPriced = 0, totalNa = 0, totalMissing = 0, totalSkipped = 0, totalCount = 0;
+  let totalManual = 0;
+  let totalFlagged = 0;
+  for (const [vendorKey, results] of Object.entries(state.results)) {
+    const exactCount = results.filter(r => r.confidence === 'exact').length;
+    const fuzzyCount = results.filter(r => ['starts-with','item-prefix-of-target','contains','token-subset','trunc-prefix','fallback'].includes(r.confidence)).length;
+    const naCount    = results.filter(r => r.confidence === 'na').length;
+    const missCount  = results.filter(r => r.confidence === 'not-found').length;
+    const skipCount  = results.filter(r => r.confidence === 'no-vendor-desc').length;
+    const manualCount = results.filter(r => r.confidence === 'manual-override').length;
+    const pricedCount = exactCount + fuzzyCount;
+    totalPriced += pricedCount;
+    totalNa += naCount;
+    totalMissing += missCount;
+    totalSkipped += skipCount;
+    totalManual += manualCount;
+    totalCount += results.length;
+    // Look up prior prices from the loaded workbook (will become "Prior Week" after Apply)
+    const vendorData = state.crossref.vendors[vendorKey];
+    const ws = state.crossref.workbook.Sheets[vendorKey];
+    const currCol = vendorData ? vendorData.currCol : null;
+    // Compute flagged count for this vendor in the preview
+    let vendorFlagged = 0;
+    const rowsWithPriorAndChange = results.map(r => {
+      let priorValue = null;
+      if (ws && currCol !== null) {
+        const cell = ws[XLSX.utils.encode_cell({ r: r.row - 1, c: currCol })];
+        if (cell && typeof cell.v === 'number') priorValue = cell.v;
+      }
+      let change = null;
+      if (priorValue !== null && r.price !== null && r.price !== undefined && priorValue > 0) {
+        change = (r.price - priorValue) / priorValue;
+        if (Math.abs(change) >= 0.10) { vendorFlagged += 1; totalFlagged += 1; }
+      }
+      return { ...r, priorValue, change };
+    });
+    html += `<div class="vendor-result-block">
+      <div class="vendor-result-head">
+        <span class="vname">${VENDOR_REGISTRY[vendorKey].label}</span>
+        <span class="vsummary">
+          <strong>${pricedCount}</strong> priced
+          ${naCount ? ' · <strong>' + naCount + '</strong> N/A' : ''}
+          ${manualCount ? ' · <strong>' + manualCount + '</strong> manual override' : ''}
+          ${missCount ? ' · <strong>' + missCount + '</strong> not found' : ''}
+          ${skipCount ? ' · <strong>' + skipCount + '</strong> no mapping' : ''}
+          ${vendorFlagged ? ' · <strong style="color:#f4d4c5;">' + vendorFlagged + ' flagged (≥10% change)</strong>' : ''}
+        </span>
+      </div>
+      <table class="results">
+        <thead>
+          <tr>
+            <th style="width: 18%;">Harrison's Product</th>
+            <th style="width: 22%;">Cross-ref says</th>
+            <th style="width: 22%;">Matched in vendor file</th>
+            <th class="num" style="width: 9%;">Prior</th>
+            <th class="num" style="width: 9%;">Current</th>
+            <th class="num" style="width: 10%;">Change</th>
+            <th class="num" style="width: 10%;">Match</th>
+          </tr>
+        </thead>
+        <tbody>`;
+    for (const r of rowsWithPriorAndChange) {
+      let rowClass = '';
+      let confText = r.confidence;
+      let priceText = fmtMoney(r.price);
+      if (r.confidence === 'exact') { rowClass = 'row-exact'; confText = 'exact'; }
+      else if (['starts-with','item-prefix-of-target','contains','token-subset','trunc-prefix'].includes(r.confidence)) { rowClass = 'row-fuzzy'; confText = 'fuzzy'; }
+      else if (r.confidence === 'fallback') { rowClass = 'row-fuzzy'; confText = 'fallback'; }
+      else if (r.confidence === 'na') { rowClass = 'row-na'; confText = 'N/A'; priceText = '—'; }
+      else if (r.confidence === 'not-found') { rowClass = 'row-miss'; confText = 'not found'; priceText = '—'; }
+      else if (r.confidence === 'no-vendor-desc') { rowClass = 'row-skip'; confText = '(no mapping)'; priceText = '—'; }
+      else if (r.confidence === 'manual-override') { rowClass = 'row-skip'; confText = 'manual override'; priceText = '— (manual)'; }
+      const priorText = (r.priorValue !== null) ? fmtMoney(r.priorValue) : '—';
+      let changeText = '—';
+      let changeStyle = '';
+      if (r.change !== null) {
+        const pct = r.change * 100;
+        const arrow = r.change > 0 ? '↑' : (r.change < 0 ? '↓' : '');
+        changeText = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}% ${arrow}`.trim();
+        if (Math.abs(r.change) >= 0.10) {
+          changeStyle = r.change > 0
+            ? 'color:#9c2c1e;font-weight:600;background:rgba(244,212,197,0.5);'
+            : 'color:#1f5236;font-weight:600;background:rgba(213,229,200,0.5);';
+        }
+      }
+      html += `<tr class="${rowClass}">
+        <td class="harrison">${escapeHtml(r.harrison)}</td>
+        <td class="vendor-desc">${r.vendorDesc ? escapeHtml(r.vendorDesc) : '—'}</td>
+        <td class="matched">${r.matchedDesc ? escapeHtml(r.matchedDesc.substring(0,50)) : '—'}</td>
+        <td class="price" style="color:var(--ink-mute);font-weight:400;">${priorText}</td>
+        <td class="price">${priceText}</td>
+        <td class="price" style="${changeStyle}">${changeText}</td>
+        <td class="confidence">${confText}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+  container.innerHTML = html;
+  actionBar.classList.remove('hide');
+  const saveAs = $('#save-as');
+  if (saveAs && !saveAs.value.trim()) saveAs.value = masterFileName();
+  // Update summary
+  $('#action-summary').innerHTML = `
+    <strong>${totalPriced} prices ready to write</strong> across ${Object.keys(state.results).length} vendor(s).
+    ${totalFlagged ? `<span style="color:var(--accent);font-weight:600;"> · ${totalFlagged} item${totalFlagged===1?'':'s'} flagged for review (≥10% change)</span>` : ''}
+    <div class="stat-line">
+      ${totalNa ? totalNa + ' marked N/A · ' : ''}${totalMissing ? totalMissing + ' not found · ' : ''}${totalSkipped ? totalSkipped + ' rows without a vendor mapping · ' : ''}all changes will write to your downloaded copy
+    </div>
+  `;
+  // Enable apply button only if something is ready
+  $('#btn-apply').disabled = totalPriced === 0 && totalNa === 0;
+  setStatus($('#preview-status'), `${totalPriced} prices ready${totalFlagged ? ', ' + totalFlagged + ' flagged' : ''}`, totalPriced > 0);
+}
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+// =================== APPLY & DOWNLOAD ===================
+function applyAndDownload() {
+  if (!state.crossref) return;
+  // Freshness guard: any vendor tab in the cross-reference with no uploaded file this week
+  // will be treated as "no pricing this week" (Current cleared, last week rolled to Prior).
+  // Surface that before writing so a forgotten upload can be caught.
+  const absentVendors = Object.keys(state.crossref.vendors).filter(v => !state.results[v]);
+  if (absentVendors.length) {
+    const labels = absentVendors.map(v => (VENDOR_REGISTRY[v] && VENDOR_REGISTRY[v].label) || v).join(', ');
+    const proceed = confirm(
+      'No file was loaded this week for: ' + labels + '.\n\n' +
+      'These vendors will be treated as having NO pricing this week \u2014 their Current Week ' +
+      'will be cleared and last week\u2019s price moved to Prior Week, so they drop out of the ' +
+      'Summary comparison.\n\nClick OK to continue, or Cancel if you still need to upload one of them.'
+    );
+    if (!proceed) return;
+  }
+  const wb = state.crossref.workbook;
+  const CURRENCY_FMT = '"$"#,##0.00';
+  const PERCENT_FMT  = '0.0%;-0.0%;"—"';
+  const CHANGE_FMT   = '"$"#,##0.00;[Red]-"$"#,##0.00;""';  // pos $X.XX; red -$X.XX; blank when zero/missing
+  const THRESHOLD    = 0.10;  // 10% flag threshold
+  // Collect data for the Flagged Items summary tab
+  const flagged = [];
+  for (const [vendorKey, results] of Object.entries(state.results)) {
+    const ws = wb.Sheets[vendorKey];
+    const vendorData = state.crossref.vendors[vendorKey];
+    if (!ws || !vendorData) continue;
+    const { priorCol, currCol, changeCol } = vendorData;
+    // STEP 1: Rotate. For every product row, copy whatever is in Current → Prior.
+    // We do this in TWO passes (read all currents first, then write priors) so we
+    // never overwrite a value we still need.
+    //
+    // Manual-override rows ARE rotated here too, so last week's Current price
+    // carries into Prior Week. (STEP 2 still leaves their new Current Week for
+    // the user to type by hand — the extractor never writes a Current value on
+    // these rows, it just advances Prior so the week-over-week comparison holds.)
+    const rotations = [];
+    for (const r of results) {
+      const rowIdx = r.row - 1;
+      const currAddr = XLSX.utils.encode_cell({ r: rowIdx, c: currCol });
+      const priorAddr = XLSX.utils.encode_cell({ r: rowIdx, c: priorCol });
+      const currCell = ws[currAddr];
+      const oldValue = (currCell && typeof currCell.v === 'number') ? currCell.v : null;
+      rotations.push({ priorAddr, oldValue });
+    }
+    for (const { priorAddr, oldValue } of rotations) {
+      if (oldValue !== null) {
+        ws[priorAddr] = { t: 'n', v: oldValue, z: CURRENCY_FMT };
+      } else {
+        // No prior value to carry over — leave blank but keep currency format slot
+        ws[priorAddr] = { t: 's', v: '', z: CURRENCY_FMT };
+      }
+    }
+    // STEP 2: Write this week's new prices into Current Week, compute % Change.
+    for (const r of results) {
+      // Manual-override rows: don't write Current. Just rewrite the % Change formula
+      // so it stays live if the user types a value into Current and Prior later.
+      if (r.manualOverride) {
+        const rowIdx = r.row - 1;
+        const priorRef = XLSX.utils.encode_cell({ r: rowIdx, c: priorCol });
+        const currRef = XLSX.utils.encode_cell({ r: rowIdx, c: currCol });
+        const changeAddr = XLSX.utils.encode_cell({ r: rowIdx, c: changeCol });
+        const changeFormula = `IF(OR(${priorRef}="",${priorRef}=0,${currRef}=""),"",(${currRef}-${priorRef})/${priorRef})`;
+        ws[changeAddr] = { t: 'n', f: changeFormula, z: PERCENT_FMT };
+        continue;
+      }
+      const rowIdx = r.row - 1;
+      const currAddr = XLSX.utils.encode_cell({ r: rowIdx, c: currCol });
+      const priorAddr = XLSX.utils.encode_cell({ r: rowIdx, c: priorCol });
+      const changeAddr = XLSX.utils.encode_cell({ r: rowIdx, c: changeCol });
+      // Read the prior cell value BEFORE writing the current cell, so we can detect
+      // the "was priced, now missing" case and flag it.
+      const priorCell = ws[priorAddr];
+      const priorValue = (priorCell && typeof priorCell.v === 'number') ? priorCell.v : null;
+      const currentValue = (r.price !== null && r.price !== undefined) ? r.price : null;
+      // Write current price (or blank with format if N/A / not-found / no-mapping).
+      // Special case: if this item is "not-found" THIS week but had a real price LAST week,
+      // write a flag string so the team notices the price disappearance.
+      // (Cell background coloring requires the paid SheetJS build; we use text only.)
+      if (r.price !== null && r.price !== undefined) {
+        ws[currAddr] = { t: 'n', v: r.price, z: CURRENCY_FMT };
+      } else if (r.confidence === 'not-found' && priorValue !== null && priorValue > 0) {
+        ws[currAddr] = { t: 's', v: 'Had price last week, blank now' };
+      } else {
+        ws[currAddr] = { t: 's', v: '', z: CURRENCY_FMT };
+      }
+      // Compute % Change — only when both prior and current are real numbers.
+      // We always write a FORMULA (not a literal value) so that if the user later
+      // edits Prior or Current manually in Excel, the % Change recalculates live.
+      // Build the formula referencing the Prior and Current cells on this same row.
+      // Formula handles three edge cases: prior blank, current blank, or prior == 0.
+      const priorRef = XLSX.utils.encode_cell({ r: rowIdx, c: priorCol });
+      const currRef = XLSX.utils.encode_cell({ r: rowIdx, c: currCol });
+      const changeFormula = `IF(OR(${priorRef}="",${priorRef}=0,${currRef}=""),"",(${currRef}-${priorRef})/${priorRef})`;
+      // IMPORTANT: We deliberately OMIT the cached value (`v` field) from the
+      // formula cell. SheetJS would let us include it, but spreadsheet apps
+      // (LibreOffice tested, Excel by inference) trust the cached value and
+      // don't recalculate after the user edits Prior or Current. Without a
+      // cached value, Excel recalculates on file open, which is the desired
+      // behavior for this column.
+      ws[changeAddr] = { t: 'n', f: changeFormula, z: PERCENT_FMT };
+      // We still compute `change` in JS for the Flagged Items table below.
+      if (priorValue !== null && currentValue !== null && priorValue > 0) {
+        const change = (currentValue - priorValue) / priorValue;
+        // Flag if absolute change meets the threshold
+        if (Math.abs(change) >= THRESHOLD) {
+          flagged.push({
+            vendor: VENDOR_REGISTRY[vendorKey].label,
+            harrison: r.harrison,
+            prior: priorValue,
+            current: currentValue,
+            change,
+            direction: change > 0 ? '↑' : '↓',
+          });
+        }
+      }
+    }
+    // STEP 3: Update the worksheet range to include all touched columns
+    const usedRange = XLSX.utils.decode_range(ws['!ref']);
+    for (const r of results) {
+      if (r.row - 1 > usedRange.e.r) usedRange.e.r = r.row - 1;
+    }
+    if (changeCol > usedRange.e.c) usedRange.e.c = changeCol;
+    ws['!ref'] = XLSX.utils.encode_range(usedRange);
+  }
+  // STEP 3.5 (ALL-VENDOR FRESHNESS): clear vendors that received NO file this week.
+  // A vendor with no uploaded file has, by definition, no pricing this week. Left untouched,
+  // last week's Current Week price would sit stagnant on their tab and keep polluting the
+  // Summary's Max/Min comparison every week (this is the "Four Star old price won't drop off"
+  // problem). So for each such vendor we apply the same one-week-older motion used for
+  // processed vendors: rotate Current -> Prior and blank Current. The Summary's per-vendor
+  // lookup then returns blank for them, which MAX/MIN ignore, so they correctly drop out of
+  // the comparison. Manual-override rows keep their hand-entered Current (still rotated to
+  // Prior) so specially-priced items are never wiped.
+  for (const [vendorKey, vendorData] of Object.entries(state.crossref.vendors)) {
+    if (state.results[vendorKey]) continue;              // had a file this week -> handled above
+    const ws = wb.Sheets[vendorKey];
+    if (!ws || !vendorData) continue;
+    const { priorCol, currCol, changeCol } = vendorData;
+    // Two passes so we never overwrite a Current value we still need to read.
+    const rotations = [];
+    for (const entry of (vendorData.entries || [])) {
+      const rowIdx = entry.row - 1;
+      const currCell = ws[XLSX.utils.encode_cell({ r: rowIdx, c: currCol })];
+      const oldValue = (currCell && typeof currCell.v === 'number') ? currCell.v : null;
+      rotations.push({ rowIdx, oldValue, manualOverride: !!entry.manualOverride });
+    }
+    for (const { rowIdx, oldValue, manualOverride } of rotations) {
+      const priorAddr  = XLSX.utils.encode_cell({ r: rowIdx, c: priorCol });
+      const currAddr   = XLSX.utils.encode_cell({ r: rowIdx, c: currCol });
+      const changeAddr = XLSX.utils.encode_cell({ r: rowIdx, c: changeCol });
+      // Rotate Current -> Prior for every row.
+      if (oldValue !== null) ws[priorAddr] = { t: 'n', v: oldValue, z: CURRENCY_FMT };
+      else ws[priorAddr] = { t: 's', v: '', z: CURRENCY_FMT };
+      // Blank Current for normal rows; leave manual-override Current untouched.
+      if (!manualOverride) ws[currAddr] = { t: 's', v: '', z: CURRENCY_FMT };
+      // Keep the live % Change formula consistent with the (now possibly blank) cells.
+      const priorRef = XLSX.utils.encode_cell({ r: rowIdx, c: priorCol });
+      const currRef  = XLSX.utils.encode_cell({ r: rowIdx, c: currCol });
+      const changeFormula = `IF(OR(${priorRef}="",${priorRef}=0,${currRef}=""),"",(${currRef}-${priorRef})/${priorRef})`;
+      ws[changeAddr] = { t: 'n', f: changeFormula, z: PERCENT_FMT };
+    }
+    // Make sure the tab's used range still covers the change column.
+    if (ws['!ref']) {
+      const rng = XLSX.utils.decode_range(ws['!ref']);
+      if (changeCol > rng.e.c) { rng.e.c = changeCol; ws['!ref'] = XLSX.utils.encode_range(rng); }
+    }
+  }
+  // STEP 4: Build (or rebuild) the Summary tab — max-price-across-vendors view.
+  // This tab sits at the very front of the workbook. It uses INDEX/MATCH formulas
+  // to look up each Harrison product's Current Week price on every vendor tab,
+  // then computes the highest cost across the row and which vendor it came from.
+  // Rebuilt fresh every run so it always reflects the current set of products
+  // across all vendor tabs (catches any new rows you've added by hand).
+  const SUMMARY_TAB = 'Summary';
+  // Two separate lists govern Summary tab structure:
+  //   summaryVendorTabs:    all vendors that get a COLUMN on Summary (display)
+  //   comparisonVendorTabs: subset that participate in Min/Max/Spread/Markup metrics
+  // excludeFromComparison drops a vendor from the comparison set without removing
+  // its column. Use case: single-source vendors like Badger Murphy (dairy/eggs)
+  // whose prices have no peer to compare against and would otherwise pollute the
+  // poultry comparison metrics.
+  const summaryVendorTabs = Object.keys(VENDOR_REGISTRY).filter(v =>
+    wb.SheetNames.includes(v)
+  );
+  const comparisonVendorTabs = summaryVendorTabs.filter(v =>
+    !VENDOR_REGISTRY[v].excludeFromComparison
+  );
+  // CHANGE_BLOCK = number of change-tracking columns inserted between the product
+  // name (col A) and the first vendor column. Layout B–E:
+  //   B: Max Change Prior        (carried forward from last week's Max Change Current)
+  //   C: Effective Change Prior  (carried forward from last week's Effective Change Current)
+  //   D: Max Change Current      (calculated: Max Price − Prior Max)
+  //   E: Effective Change Current(manual entry — the cost the pricer actually used)
+  // Because of this block plus the pinned Max Price column (B), the first vendor column is
+  // now index FRONT = 2 + CHANGE_BLOCK = 6 (G), and downstream metric offsets shift with it.
+  const CHANGE_BLOCK = 4;
+  // Max Price is pinned to column B (0-indexed 1), immediately after the product name, so the
+  // highest-cost figure reads right next to the item. The change-tracking block follows in C-F.
+  const MAX_PRICE_COL = 1;
+  const FRONT = 2 + CHANGE_BLOCK;  // 0-indexed column of first vendor (G)
+  // For each vendor tab, find what column index the Current Week is in (it might not
+  // be the same on every tab — Fox, Nealey, etc. each had a different number of
+  // columns before migration). We resolved this earlier via state.crossref.vendors
+  // but only for tabs we processed. To be safe and cover any tab we didn't touch
+  // this run, re-detect column indices here directly from the worksheet headers.
+  const vendorCurrCol = {};  // tab name → 0-indexed column number for Current Week
+  const vendorPriorCol = {};  // tab name → 0-indexed column number for Prior Week
+  for (const tab of summaryVendorTabs) {
+    const sheet = wb.Sheets[tab];
+    if (!sheet || !sheet['!ref']) continue;
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    let foundCurr = null;
+    let foundPrior = null;
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const h = String(sheet[XLSX.utils.encode_cell({ r: 0, c })]?.v || '').trim().toLowerCase();
+      if (h.includes('current') && foundCurr === null) foundCurr = c;
+      if (h.includes('prior') && foundPrior === null) foundPrior = c;
+    }
+    // Fallback: if no "Current" header found, assume column index 3 (D) which is the
+    // post-migration default. Better to point at SOMETHING than crash.
+    vendorCurrCol[tab] = (foundCurr !== null) ? foundCurr : 3;
+    // Prior Week is conventionally column C (index 2) — same fallback rationale.
+    vendorPriorCol[tab] = (foundPrior !== null) ? foundPrior : 2;
+  }
+  // Gather all unique Harrison products across ALL vendor tabs (including Badger Murphy),
+  // preserving first-seen order. This way Badger Murphy products appear as Summary rows
+  // even though they won't participate in cross-vendor comparison.
+  const seenProducts = new Set();
+  const orderedProducts = [];
+  for (const tab of summaryVendorTabs) {
+    const sheet = wb.Sheets[tab];
+    if (!sheet || !sheet['!ref']) continue;
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    for (let r = range.s.r + 1; r <= range.e.r; r++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c: 0 })];
+      const val = cell?.v;
+      if (!val) continue;
+      const name = String(val).trim();
+      if (!name || seenProducts.has(name)) continue;
+      seenProducts.add(name);
+      orderedProducts.push(name);
+    }
+  }
+  // CARRY-FORWARD CAPTURE: before we delete last week's Summary, read the values we
+  // need to roll forward into this week's Prior columns, keyed by product name:
+  //   • Max Change Current  → this week's Max Change Prior
+  //   • Effective Change Current → this week's Effective Change Prior
+  // Matched by header text so this works whether last week's file used the new layout
+  // ("Max Change Current") or the older one ("Max Change $"), and whether or not it had
+  // an Effective Change column yet. Only numeric cached values carry (blank otherwise).
+  const priorSummary = {};  // productName → { maxChangeCurrent, effChangeCurrent }
+  if (wb.SheetNames.includes(SUMMARY_TAB)) {
+    const prevWs = wb.Sheets[SUMMARY_TAB];
+    if (prevWs && prevWs['!ref']) {
+      const pr = XLSX.utils.decode_range(prevWs['!ref']);
+      let maxChgC = null, effChgC = null;
+      for (let c = pr.s.c; c <= pr.e.c; c++) {
+        const h = String(prevWs[XLSX.utils.encode_cell({ r: 0, c })]?.v || '').trim().toLowerCase();
+        if (!h) continue;
+        // Max Change Current / legacy "Max Change $" — but NOT "Max Change Prior"
+        if (h.includes('max change') && !h.includes('prior') && maxChgC === null) maxChgC = c;
+        // Effective Change Current — but NOT "Effective Change Prior"
+        if (h.includes('effective change') && !h.includes('prior') && effChgC === null) effChgC = c;
+      }
+      for (let r = pr.s.r + 1; r <= pr.e.r; r++) {
+        const name = String(prevWs[XLSX.utils.encode_cell({ r, c: 0 })]?.v || '').trim();
+        if (!name) continue;
+        const rec = {};
+        if (maxChgC !== null) {
+          const v = prevWs[XLSX.utils.encode_cell({ r, c: maxChgC })]?.v;
+          if (typeof v === 'number') rec.maxChangeCurrent = v;
+        }
+        if (effChgC !== null) {
+          const v = prevWs[XLSX.utils.encode_cell({ r, c: effChgC })]?.v;
+          if (typeof v === 'number') rec.effChangeCurrent = v;
+        }
+        priorSummary[name] = rec;
+      }
+    }
+  }
+  // Build the Summary worksheet
+  if (wb.SheetNames.includes(SUMMARY_TAB)) {
+    delete wb.Sheets[SUMMARY_TAB];
+    wb.SheetNames = wb.SheetNames.filter(n => n !== SUMMARY_TAB);
+  }
+  // Column layout (0-indexed):
+  //   A(0):  Harrison's Product Name
+  //   B(1):  Max Price                  (pinned to front: highest cost across vendors)
+  //   C(2):  Max Change Prior           (carried forward)
+  //   D(3):  Effective Change Prior     (carried forward)
+  //   E(4):  Max Change Current         (mirrors Max Price)
+  //   F(5):  Effective Change Current   (manual entry)
+  //   G..(6..): vendor lookup columns
+  //   then: Min Price, Cheapest Vendor, Highest Cost Vendor,
+  //         Spread $, (Max-Min)/Min, Prior Max, Prior Min, Min Change $,
+  //         hidden per-vendor _*_Prior helpers, Missing This Week
+  const summaryHeaders = [
+    "Harrison's Product Name",
+    'Max Price',
+    'Max Change Prior', 'Effective Change Prior', 'Max Change Current', 'Effective Change Current',
+    ...summaryVendorTabs,
+    'Min Price', 'Cheapest Vendor',
+    'Highest Cost Vendor',
+    'Spread $', '(Max-Min)/Min',
+    'Prior Max',
+    'Prior Min', 'Min Change $',
+    // hidden helper columns for per-vendor prior-week prices (hidden via !cols below)
+    ...summaryVendorTabs.filter(v => !VENDOR_REGISTRY[v].excludeFromComparison).map(v => `_${v}_Prior`),
+    // Missing This Week — flag of vendors whose price disappeared this week
+    'Missing This Week',
+  ];
+  const summaryAOA = [summaryHeaders];
+  for (const product of orderedProducts) {
+    // One placeholder cell per header column; formulas/values are written explicitly below.
+    summaryAOA.push([product, ...Array(summaryHeaders.length - 1).fill(null)]);
+  }
+  const summaryWs = XLSX.utils.aoa_to_sheet(summaryAOA);
+  // Helper: column letter from 0-indexed column number
+  function colLetter(n) {
+    let s = '';
+    let x = n + 1;
+    while (x > 0) {
+      const rem = (x - 1) % 26;
+      s = String.fromCharCode(65 + rem) + s;
+      x = Math.floor((x - 1) / 26);
+    }
+    return s;
+  }
+  // Quote sheet name if it has spaces or punctuation (Four Star, New S.B.L, etc.)
+  function quoteSheet(name) {
+    return /[\s.']/.test(name) ? `'${name.replace(/'/g, "''")}'` : name;
+  }
+  // Write formulas for each data row in the summary
+  for (let i = 0; i < orderedProducts.length; i++) {
+    const row = i + 1;  // 0-indexed row in summary (header is row 0, products start at row 1)
+    const excelRow = row + 1;  // 1-indexed for formulas (Excel row 2 onward)
+    // Per-vendor lookup formulas — vendor columns now start at F (0-indexed 1 + CHANGE_BLOCK)
+    for (let vi = 0; vi < summaryVendorTabs.length; vi++) {
+      const tab = summaryVendorTabs[vi];
+      const col = vi + FRONT;  // 0-indexed: A=0 product, B=Max Price, C-F change block, G=first vendor
+      const tabRef = quoteSheet(tab);
+      const currColLetter = colLetter(vendorCurrCol[tab]);
+      // INDEX($vendor!CurrCol:CurrCol, MATCH($A_row, $vendor!A:A, 0))
+      // Wrap with IFERROR to handle "product not on this tab" (MATCH returns #N/A).
+      // Wrap inner with IF(=0,"") to convert "empty cell returns 0" to a true blank.
+      const inner = `INDEX(${tabRef}!${currColLetter}:${currColLetter}, MATCH($A${excelRow}, ${tabRef}!A:A, 0))`;
+      const formula = `IFERROR(IF(${inner}="","",IF(${inner}=0,"",${inner})),"")`;
+      const addr = XLSX.utils.encode_cell({ r: row, c: col });
+      summaryWs[addr] = { t: 'n', f: formula, z: CURRENCY_FMT };
+    }
+    // Compute column references for the metric columns.
+    // The vendor columns occupy positions (1+CHANGE_BLOCK)..(summaryVendorTabs.length+CHANGE_BLOCK).
+    // But the COMPARISON RANGE used for Min/Max/Spread/Markup must exclude any
+    // vendor flagged with excludeFromComparison (e.g., Badger Murphy — single-source
+    // dairy, no peer to compare against).
+    //
+    // Strategy: find the 0-indexed positions of all comparison-eligible vendors in
+    // the summaryVendorTabs array, and build the range from the first/last of those.
+    // This assumes comparison vendors are contiguous starting at column F, which is
+    // true given how the registry is ordered (excluded vendors at the end).
+    const comparisonIndices = summaryVendorTabs
+      .map((v, i) => VENDOR_REGISTRY[v].excludeFromComparison ? -1 : i + FRONT)  // 0-indexed column number
+      .filter(i => i > 0);
+    // Verify contiguity: indices must be consecutive starting from the first vendor col (F)
+    const isContiguousFromB = comparisonIndices.length > 0
+      && comparisonIndices[0] === FRONT
+      && comparisonIndices.every((v, i) => i === 0 || v === comparisonIndices[i - 1] + 1);
+    if (!isContiguousFromB) {
+      // If this ever fires, the registry has been reordered such that comparison
+      // vendors are no longer at the front. The formulas below would silently include
+      // the wrong columns. Loud warning so we catch this in testing.
+      console.warn('Summary build: comparison vendors are not contiguous from the first vendor column. ' +
+                   'Min/Max formulas may include excluded vendors. ' +
+                   'Reorder VENDOR_REGISTRY so non-comparison vendors are at the end.');
+    }
+    const firstVendorCol = colLetter(FRONT);                                                 // G
+    const lastCompareCol = colLetter(comparisonIndices[comparisonIndices.length - 1] || (summaryVendorTabs.length + FRONT - 1));
+    const comparisonRange = `${firstVendorCol}${excelRow}:${lastCompareCol}${excelRow}`;
+    const headerComparisonRange = `$${firstVendorCol}$1:$${lastCompareCol}$1`;
+    // -----------------------------------------------------------------------
+    // Detect the "Badger Murphy only" case for this row.
+    // BM is the vendor flagged excludeFromComparison. We find its column letter, then
+    // build a condition: BM has a value AND no comparison vendor (F..) has a value.
+    // -----------------------------------------------------------------------
+    const bmIndex = summaryVendorTabs.findIndex(v => VENDOR_REGISTRY[v].excludeFromComparison);
+    const bmTabName = bmIndex >= 0 ? summaryVendorTabs[bmIndex] : null;
+    const bmColLetter = bmIndex >= 0 ? colLetter(FRONT + bmIndex) : null;
+    const bmOnly = bmColLetter
+      ? `AND($${bmColLetter}${excelRow}<>"",COUNT(${comparisonRange})=0)`
+      : 'FALSE()';  // no BM vendor → never trigger the special case
+    // 0-indexed positions of the 6 metric columns (shifted right by CHANGE_BLOCK):
+    const maxCol = MAX_PRICE_COL;                          // B (pinned Max Price)
+    const afterVendors = summaryVendorTabs.length + FRONT;  // 0-indexed first metric col
+    const minCol = afterVendors;          // Min Price
+    const cheapCol = afterVendors + 1;    // Cheapest Vendor
+    const srcCol = afterVendors + 2;      // Highest Cost Vendor
+    const spreadCol = afterVendors + 3;   // Spread $
+    const markupCol = afterVendors + 4;   // (Max-Min)/Min
+    const minColLetter = colLetter(minCol);
+    const maxColLetter = colLetter(maxCol);
+    // Min Price: BM-only rows DASH; else plain MIN over comparison range
+    const minFormula = `IF(${bmOnly},"—",IF(COUNT(${comparisonRange})=0,"",MIN(${comparisonRange})))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: minCol })] = { t: 'n', f: minFormula, z: CURRENCY_FMT };
+    // Cheapest Vendor: BM-only rows DASH; else INDEX-MATCH within comparison range
+    const cheapFormula = `IF(${bmOnly},"—",IFERROR(IF(${minColLetter}${excelRow}="","",INDEX(${headerComparisonRange}, MATCH(${minColLetter}${excelRow}, ${comparisonRange}, 0))),""))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: cheapCol })] = { t: 's', f: cheapFormula };
+    // Max Price: BM-only rows show BM's price; else MAX over comparison range
+    const maxFormula = `IF(${bmOnly},$${bmColLetter}${excelRow},IFERROR(IF(MAX(${comparisonRange})=0,"",MAX(${comparisonRange})),""))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: maxCol })] = { t: 'n', f: maxFormula, z: CURRENCY_FMT };
+    // Highest Cost Vendor: BM-only rows show "Badger Murphy"; else INDEX-MATCH within comparison range
+    const srcFormula = `IF(${bmOnly},"Badger Murphy",IFERROR(IF(${maxColLetter}${excelRow}="","",INDEX(${headerComparisonRange}, MATCH(${maxColLetter}${excelRow}, ${comparisonRange}, 0))),""))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: srcCol })] = { t: 's', f: srcFormula };
+    // Spread $: if BM-only, dash; else Max - Min when ≥2 comparison vendors
+    const spreadFormula = `IF(${bmOnly},"—",IF(OR(${minColLetter}${excelRow}="",${maxColLetter}${excelRow}="",COUNT(${comparisonRange})<2),"",${maxColLetter}${excelRow}-${minColLetter}${excelRow}))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: spreadCol })] = { t: 'n', f: spreadFormula, z: CURRENCY_FMT };
+    // (Max-Min)/Min: if BM-only, dash; else the ratio when ≥2 comparison vendors
+    const markupFormula = `IF(${bmOnly},"—",IF(OR(${minColLetter}${excelRow}="",${maxColLetter}${excelRow}="",${minColLetter}${excelRow}=0,COUNT(${comparisonRange})<2),"",(${maxColLetter}${excelRow}-${minColLetter}${excelRow})/${minColLetter}${excelRow}))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: markupCol })] = { t: 'n', f: markupFormula, z: PERCENT_FMT };
+    // -----------------------------------------------------------------------
+    // Prior-week reference columns + hidden helpers + Missing This Week flag.
+    // After the 6 metrics come:
+    //   priorMaxCol    = markupCol + 1   (Prior Max)
+    //   priorMinCol    = markupCol + 2   (Prior Min)
+    //   minChangeCol   = markupCol + 3   (Min Change $)
+    //   helperStartCol = markupCol + 4   (hidden per-vendor prior-week lookups)
+    //   missingThisWeekCol = helperStartCol + N helpers
+    // The change-tracking columns live in the front block (0-indexed):
+    //   maxChangePriorCol = 1 (B), effChangePriorCol = 2 (C),
+    //   maxChangeCurrentCol = 3 (D), effChangeCurrentCol = 4 (E)
+    // -----------------------------------------------------------------------
+    const priorMaxCol = markupCol + 1;
+    const priorMinCol = markupCol + 2;
+    const minChangeCol = markupCol + 3;
+    const helperStartCol = markupCol + 4;
+    const maxChangePriorCol = 2;    // C
+    const effChangePriorCol = 3;    // D
+    const maxChangeCurrentCol = 4;  // E
+    const effChangeCurrentCol = 5;  // F
+    // Write the hidden helper cells first: per-vendor prior-week INDEX/MATCH lookups
+    // mirror the current-week lookups but point at vendorPriorCol instead.
+    const comparisonTabsOnly = summaryVendorTabs.filter(v => !VENDOR_REGISTRY[v].excludeFromComparison);
+    for (let hi = 0; hi < comparisonTabsOnly.length; hi++) {
+      const tab = comparisonTabsOnly[hi];
+      const tabRef = quoteSheet(tab);
+      const priorColLetter = colLetter(vendorPriorCol[tab]);
+      const inner = `INDEX(${tabRef}!${priorColLetter}:${priorColLetter}, MATCH($A${excelRow}, ${tabRef}!A:A, 0))`;
+      const formula = `IFERROR(IF(${inner}="","",IF(${inner}=0,"",${inner})),"")`;
+      summaryWs[XLSX.utils.encode_cell({ r: row, c: helperStartCol + hi })] = { t: 'n', f: formula, z: CURRENCY_FMT };
+    }
+    // Build the helper range reference (e.g., $U2:$Y2)
+    const helperFirstLetter = colLetter(helperStartCol);
+    const helperLastLetter = colLetter(helperStartCol + comparisonTabsOnly.length - 1);
+    const helperRange = `$${helperFirstLetter}${excelRow}:$${helperLastLetter}${excelRow}`;
+    // Prior Max: if BM-only, look up BM's prior price directly; else MAX of helper range
+    const bmTabRef = bmTabName ? quoteSheet(bmTabName) : null;
+    const bmPriorLookup = bmTabName
+      ? `INDEX(${bmTabRef}!${colLetter(vendorPriorCol[bmTabName])}:${colLetter(vendorPriorCol[bmTabName])},MATCH($A${excelRow},${bmTabRef}!A:A,0))`
+      : '""';
+    const bmPriorFormula = `IFERROR(IF(${bmPriorLookup}="","",IF(${bmPriorLookup}=0,"",${bmPriorLookup})),"")`;
+    const priorMaxFormula = `IF(${bmOnly},${bmPriorFormula},IFERROR(IF(MAX(${helperRange})=0,"",MAX(${helperRange})),""))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: priorMaxCol })] = { t: 'n', f: priorMaxFormula, z: CURRENCY_FMT };
+    // Max Change Current (front-block col D): current Max − Prior Max. Computes for ALL
+    // rows including BM-only, since Max and Prior Max are both populated for BM-only rows.
+    // Guards against text values (e.g., "—") by requiring ISNUMBER.
+    // Max Change Current (col D) now holds the item's HIGHEST COST across vendors this
+    // week (mirrors Max Price). It rolls into Max Change Prior (col B) next week.
+    const maxChangeFormula = `IFERROR(IF(${maxColLetter}${excelRow}="","",${maxColLetter}${excelRow}),"")`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: maxChangeCurrentCol })] = { t: 'n', f: maxChangeFormula, z: CURRENCY_FMT };
+    // Prior Min: if BM-only, dash; else MIN of helper range
+    const priorMinFormula = `IF(${bmOnly},"—",IF(COUNT(${helperRange})=0,"",MIN(${helperRange})))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: priorMinCol })] = { t: 'n', f: priorMinFormula, z: CURRENCY_FMT };
+    // Min Change $: if BM-only, dash; else current Min − Prior Min
+    const priorMinColLetter = colLetter(priorMinCol);
+    const minChangeFormula = `IF(${bmOnly},"—",IFERROR(IF(OR(${minColLetter}${excelRow}="",${priorMinColLetter}${excelRow}=""),"",${minColLetter}${excelRow}-${priorMinColLetter}${excelRow}),""))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: minChangeCol })] = { t: 'n', f: minChangeFormula, z: CHANGE_FMT };
+    // Front-block carry-forward + manual columns:
+    //   Max Change Prior (B) ← last week's Max Change Current (numeric, from priorSummary)
+    //   Effective Change Prior (C) ← last week's Effective Change Current
+    //   Effective Change Current (E) ← blank; the pricer types the cost they actually used
+    const prev = priorSummary[orderedProducts[i]] || {};
+    if (typeof prev.maxChangeCurrent === 'number') {
+      summaryWs[XLSX.utils.encode_cell({ r: row, c: maxChangePriorCol })] = { t: 'n', v: prev.maxChangeCurrent, z: CURRENCY_FMT };
+    } else {
+      summaryWs[XLSX.utils.encode_cell({ r: row, c: maxChangePriorCol })] = { t: 's', v: '', z: CURRENCY_FMT };
+    }
+    if (typeof prev.effChangeCurrent === 'number') {
+      summaryWs[XLSX.utils.encode_cell({ r: row, c: effChangePriorCol })] = { t: 'n', v: prev.effChangeCurrent, z: CURRENCY_FMT };
+    } else {
+      summaryWs[XLSX.utils.encode_cell({ r: row, c: effChangePriorCol })] = { t: 's', v: '', z: CURRENCY_FMT };
+    }
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: effChangeCurrentCol })] = { t: 's', v: '', z: CURRENCY_FMT };
+    // Missing This Week: per-row, comma-separated list of vendors whose current price is blank
+    // AND prior price (from hidden helper) was > 0. Uses old-style IF + & concatenation so it
+    // works on all Excel versions (no dependency on TEXTJOIN). Strips leading separator.
+    // Current vendor cols start at F (1+CHANGE_BLOCK+hi); helpers at helperStartCol+hi hold their priors.
+    const missingThisWeekCol = helperStartCol + comparisonTabsOnly.length;
+    const missingParts = comparisonTabsOnly.map((tab, hi) => {
+      const currColLetter = colLetter(FRONT + hi);   // G, H, I, J, K (Fox..NSBL in order)
+      const priorColLetter = colLetter(helperStartCol + hi);    // hidden prior helpers
+      const label = VENDOR_REGISTRY[tab].label || tab;
+      // Each part: if current blank AND prior is a positive number, emit ", VendorLabel"
+      return `IF(AND(${currColLetter}${excelRow}="",ISNUMBER(${priorColLetter}${excelRow}),${priorColLetter}${excelRow}>0),", ${label}","")`;
+    }).join(' & ');
+    const missingFormula = `IF(LEN(${missingParts})=0,"",MID(${missingParts},3,999))`;
+    summaryWs[XLSX.utils.encode_cell({ r: row, c: missingThisWeekCol })] = { t: 's', f: missingFormula };
+  }
+  // Update sheet range to include all written cells
+  const totalCols = summaryHeaders.length;
+  const totalRows = orderedProducts.length + 1;
+  summaryWs['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totalRows - 1, c: totalCols - 1 } });
+  // Column widths — sized for bold headers + data content
+  const comparisonTabCount = summaryVendorTabs.filter(v => !VENDOR_REGISTRY[v].excludeFromComparison).length;
+  summaryWs['!cols'] = [
+    { wch: 32 },                                    // A product name (header 23 chars)
+    { wch: 13 },                                    // B Max Price
+    { wch: 16 },                                    // C Max Change Prior
+    { wch: 20 },                                    // D Effective Change Prior
+    { wch: 16 },                                    // E Max Change Current
+    { wch: 20 },                                    // F Effective Change Current
+    ...summaryVendorTabs.map(() => ({ wch: 13 })),  // vendor cols
+    { wch: 13 },                                    // Min Price
+    { wch: 18 },                                    // Cheapest Vendor (header 15 chars)
+    { wch: 18 },                                    // Highest Cost Vendor (header 19 chars)
+    { wch: 13 },                                    // Spread $
+    { wch: 13 },                                    // (Max-Min)/Min
+    { wch: 13 },                                    // Prior Max
+    { wch: 13 },                                    // Prior Min
+    { wch: 14 },                                    // Min Change $
+    ...Array(comparisonTabCount).fill({ wch: 1, hidden: true }),  // hidden helper cols
+    { wch: 26 },                                    // Missing This Week
+  ];
+  // Freeze top row
+  summaryWs['!freeze'] = { xSplit: 0, ySplit: 1 };
+  // Insert Summary at position 0 — but Flagged Items goes there *after* this step,
+  // which will push Summary to position 1. We want final order: Summary first, then
+  // Flagged Items. So we insert Summary now, then Flagged Items will go at index 0,
+  // pushing Summary to index 1. To get Summary FIRST in the final output we must
+  // insert it AFTER Flagged Items is built. Defer to end of Flagged Items section.
+  // For now, just stash it on the workbook so we can position it correctly later.
+  wb.Sheets[SUMMARY_TAB] = summaryWs;
+  // Don't push to SheetNames yet — we'll do that after Flagged Items so the order is right.
+  // STEP 5: Build the Flagged Items summary tab
+  // Sort: increases first (by descending magnitude), then decreases (by descending magnitude)
+  flagged.sort((a, b) => {
+    if (a.change > 0 && b.change <= 0) return -1;
+    if (a.change <= 0 && b.change > 0) return 1;
+    return Math.abs(b.change) - Math.abs(a.change);
+  });
+  const FLAGGED_TAB = 'Flagged Items';
+  const flaggedData = [
+    ['Vendor', "Harrison's Product", 'Prior Week', 'Current Week', '% Change', 'Direction'],
+  ];
+  for (const f of flagged) {
+    flaggedData.push([f.vendor, f.harrison, f.prior, f.current, f.change, f.direction]);
+  }
+  if (flagged.length === 0) {
+    flaggedData.push(['No items flagged this week (no price changes ≥10% in either direction).', '', '', '', '', '']);
+  }
+  // Replace if already exists
+  if (wb.SheetNames.includes(FLAGGED_TAB)) {
+    delete wb.Sheets[FLAGGED_TAB];
+    wb.SheetNames = wb.SheetNames.filter(n => n !== FLAGGED_TAB);
+  }
+  const flagWs = XLSX.utils.aoa_to_sheet(flaggedData);
+  // Apply currency / percent formats on the appropriate columns of the flagged tab
+  for (let r = 1; r < flaggedData.length; r++) {
+    if (typeof flaggedData[r][2] === 'number') {
+      flagWs[XLSX.utils.encode_cell({ r, c: 2 })].z = CURRENCY_FMT;
+    }
+    if (typeof flaggedData[r][3] === 'number') {
+      flagWs[XLSX.utils.encode_cell({ r, c: 3 })].z = CURRENCY_FMT;
+    }
+    if (typeof flaggedData[r][4] === 'number') {
+      flagWs[XLSX.utils.encode_cell({ r, c: 4 })].z = PERCENT_FMT;
+    }
+  }
+  // Reasonable column widths
+  flagWs['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 10 }];
+  // Tab ordering: we want the final order to be:
+  //   Flagged Items → Summary → vendor tabs
+  // To achieve this with unshift (which prepends), we insert in REVERSE order:
+  //   1. Summary first (goes to position 0)
+  //   2. Flagged Items second (also goes to position 0, pushing Summary to 1)
+  //
+  // Summary was built in STEP 4 and stashed on wb.Sheets but not yet in SheetNames.
+  if (wb.Sheets[SUMMARY_TAB] && !wb.SheetNames.includes(SUMMARY_TAB)) {
+    wb.SheetNames.unshift(SUMMARY_TAB);
+  }
+  // Now insert Flagged Items at position 0 so it ends up first
+  wb.SheetNames.unshift(FLAGGED_TAB);
+  wb.Sheets[FLAGGED_TAB] = flagWs;
+  // STEP 5: Write the workbook out
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true });
+  const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  let fname = ($('#save-as')?.value || '').trim() || masterFileName();
+  if (!/\.xlsx$/i.test(fname)) fname += '.xlsx';
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
+}
+// =================== UI: FILE-CHIP DISPLAY (batch mode) ===================
+function renderBatchChips() {
+  const container = $('#batch-chips');
+  if (!Object.keys(state.vendorFiles).length) {
+    container.innerHTML = '';
+    return;
+  }
+  let html = '';
+  for (const [vendorKey, info] of Object.entries(state.vendorFiles)) {
+    if (vendorKey === '__unknown__') {
+      for (const u of info) {
+        const ocrHint = u.needsOcr
+          ? `<span style="color:var(--ink-mute);font-size:11px;margin-left:6px;">image-based — pick vendor for OCR</span>`
+          : '';
+        const vendorOpts = Object.entries(VENDOR_REGISTRY)
+          .map(([k, v]) => `<option value="${escapeHtml(k)}">${escapeHtml(v.label)}</option>`)
+          .join('');
+        html += `<span class="file-chip unknown">
+          <span class="vendor-tag">unknown</span>
+          ${escapeHtml(u.file.name)}${ocrHint}
+          <select class="unknown-assign" data-unknown-assign="${escapeHtml(u.file.name)}" style="margin-left:6px;font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;">
+            <option value="">assign vendor…</option>
+            ${vendorOpts}
+          </select>
+          <span class="x" data-unknown="${escapeHtml(u.file.name)}">×</span>
+        </span>`;
+      }
+    } else {
+      const label = VENDOR_REGISTRY[vendorKey]?.label || vendorKey;
+      const isMultiFile = !!VENDOR_REGISTRY[vendorKey]?.multiFile;
+      const status = info.status === 'processing' ? '<span class="spinner"></span>' : '';
+      const statusText = (info.status === 'processing' && info.statusText)
+        ? `<span style="color:var(--ink-mute);font-size:11px;margin-left:6px;">${escapeHtml(info.statusText)}</span>`
+        : '';
+      // Files list — show all file names for multi-file vendors, just the one for single-file
+      const files = info.files || (info.file ? [info.file] : []);
+      const fileList = files.map(f => escapeHtml(f.name)).join(', ');
+      const countBadge = (isMultiFile && files.length > 0)
+        ? `<span style="font-size:10px;color:var(--ink-mute);margin-left:4px;">(${files.length} file${files.length === 1 ? '' : 's'})</span>`
+        : '';
+      html += `<span class="file-chip">
+        ${status}<span class="vendor-tag">${escapeHtml(label)}</span>${countBadge}
+        ${fileList}${statusText}
+        <span class="x" data-vendor="${escapeHtml(vendorKey)}">×</span>
+      </span>`;
+    }
+  }
+  container.innerHTML = html;
+  container.querySelectorAll('[data-vendor]').forEach(x => {
+    x.addEventListener('click', () => {
+      const v = x.getAttribute('data-vendor');
+      delete state.vendorFiles[v];
+      delete state.results[v];
+      renderBatchChips();
+      renderPreview();
+      updateVendorCards();
+    });
+  });
+  container.querySelectorAll('[data-unknown]').forEach(x => {
+    x.addEventListener('click', () => {
+      const name = x.getAttribute('data-unknown');
+      state.vendorFiles.__unknown__ = (state.vendorFiles.__unknown__ || []).filter(u => u.file.name !== name);
+      if (!state.vendorFiles.__unknown__.length) delete state.vendorFiles.__unknown__;
+      renderBatchChips();
+    });
+  });
+  container.querySelectorAll('[data-unknown-assign]').forEach(sel => {
+    sel.addEventListener('change', async (e) => {
+      const fileName = sel.getAttribute('data-unknown-assign');
+      const chosenKey = sel.value;
+      if (!chosenKey) return;
+      const list = state.vendorFiles.__unknown__ || [];
+      const idx = list.findIndex(u => u.file.name === fileName);
+      if (idx < 0) return;
+      const fileObj = list[idx].file;
+      // Remove from unknowns
+      list.splice(idx, 1);
+      if (!list.length) delete state.vendorFiles.__unknown__;
+      renderBatchChips();
+      // Process under the chosen vendor key (forcing it, bypassing detection)
+      await processVendorFile(fileObj, chosenKey);
+      renderPreview();
+    });
+  });
+}
+// =================== UI: VENDOR CARDS (single mode) ===================
+function buildVendorCards() {
+  const grid = $('#vendor-card-grid');
+  let html = '';
+  for (const [key, info] of Object.entries(VENDOR_REGISTRY)) {
+    const fmt = info.formats.join(' / ');
+    html += `<label class="vendor-card" data-vendor="${key}">
+      <div class="vc-name">${escapeHtml(info.label)}</div>
+      <div class="vc-fmt">${escapeHtml(fmt)} format</div>
+      <div class="vc-cta">Click to upload</div>
+      <input type="file" class="vc-file-hidden" accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp" data-vendor-input="${key}"/>
+    </label>`;
+  }
+  grid.innerHTML = html;
+  grid.querySelectorAll('.vendor-card').forEach(card => {
+    const key = card.getAttribute('data-vendor');
+    const input = card.querySelector('input[type=file]');
+    const isMultiFile = !!VENDOR_REGISTRY[key]?.multiFile;
+    if (isMultiFile) input.setAttribute('multiple', 'multiple');
+    // Card is a <label> wrapping input — clicking opens picker natively.
+    input.addEventListener('change', async e => {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+      // Process files sequentially so multi-file vendors merge correctly
+      for (const f of files) {
+        await processVendorFile(f, key);
+      }
+      updateVendorCards();
+      renderPreview();
+      // Reset the input so the user can re-select the SAME file (browsers suppress
+      // duplicate selections otherwise — important for multi-file vendors)
+      input.value = '';
+    });
+  });
+}
+function updateVendorCards() {
+  $$('#vendor-card-grid .vendor-card').forEach(card => {
+    const key = card.getAttribute('data-vendor');
+    const isMultiFile = !!VENDOR_REGISTRY[key]?.multiFile;
+    if (state.vendorFiles[key]) {
+      card.classList.add('loaded');
+      const info = state.vendorFiles[key];
+      const files = info.files || (info.file ? [info.file] : []);
+      const ctaDiv = card.querySelector('.vc-cta');
+      if (ctaDiv) {
+        if (isMultiFile && files.length === 1) {
+          // After first file: invite user to upload the second
+          ctaDiv.innerHTML = `<span style="font-size:11px;color:var(--ink-mute);font-family:var(--mono);">${escapeHtml(files[0].name).slice(0,28)}<br/><strong style="color:var(--accent);">+ click to add another file</strong></span>`;
+        } else if (isMultiFile && files.length > 1) {
+          const names = files.map(f => escapeHtml(f.name).slice(0, 28)).join('<br/>');
+          ctaDiv.innerHTML = `<span style="font-size:11px;color:var(--ink-mute);font-family:var(--mono);">${names}<br/><strong>${files.length} files loaded</strong></span>`;
+        } else {
+          ctaDiv.innerHTML = `<span style="font-size:11px;color:var(--ink-mute);font-family:var(--mono);">${escapeHtml(files[0]?.name || '').slice(0,30)}</span>`;
+        }
+      }
+    } else {
+      card.classList.remove('loaded');
+      const ctaDiv = card.querySelector('.vc-cta');
+      if (ctaDiv) ctaDiv.textContent = isMultiFile ? 'Click to upload (2 files)' : 'Click to upload';
+    }
+  });
+}
+// =================== CORE FLOW: process a single vendor file ===================
+async function processVendorFile(file, forcedVendorKey) {
+  let vendorKey = forcedVendorKey;
+  if (!vendorKey) {
+    vendorKey = await detectVendor(file);
+  }
+  if (!vendorKey) {
+    // Image-only PDFs and PNG/JPG won't have detectable text. If the file looks like
+    // it might need OCR, route to unknowns with an OCR hint so the user can pick a vendor.
+    const name = file.name.toLowerCase();
+    const couldBeOcr = name.endsWith('.pdf') || /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
+    state.vendorFiles.__unknown__ = state.vendorFiles.__unknown__ || [];
+    state.vendorFiles.__unknown__.push({ file, needsOcr: couldBeOcr });
+    renderBatchChips();
+    return;
+  }
+  const isMultiFile = !!VENDOR_REGISTRY[vendorKey]?.multiFile;
+  // Decide whether to append (multi-file vendor adding another file) or replace (default)
+  let files;
+  if (isMultiFile && state.vendorFiles[vendorKey] && state.vendorFiles[vendorKey].files) {
+    // Append: keep existing files, add the new one
+    // Deduplicate by name+size in case the same file is selected twice
+    const existing = state.vendorFiles[vendorKey].files;
+    const isDuplicate = existing.some(f => f.name === file.name && f.size === file.size);
+    files = isDuplicate ? existing : [...existing, file];
+  } else {
+    files = [file];
+  }
+  state.vendorFiles[vendorKey] = { files, status: 'processing', statusText: '' };
+  renderBatchChips();
+  // Progress callback updates the chip text so the user can see what OCR/processing is doing
+  const progressCb = (msg) => {
+    if (state.vendorFiles[vendorKey]) {
+      state.vendorFiles[vendorKey].statusText = msg;
+      renderBatchChips();
+    }
+  };
+  try {
+    // Process EVERY file for this vendor, merging priced items across files.
+    // Conflict rule (same vendor desc in multiple files): highest price wins —
+    // already implemented in findPrice via .sort((a,b) => b.p - a.p).
+    let mergedPriced = [];
+    let mergedNa = [];
+    let mergedFox = false;
+    for (let i = 0; i < files.length; i++) {
+      if (files.length > 1) progressCb(`Processing file ${i + 1} of ${files.length}: ${files[i].name}`);
+      const partial = await extractFromVendorFile(vendorKey, files[i], progressCb);
+      mergedPriced = mergedPriced.concat(partial.pricedItems);
+      mergedNa = mergedNa.concat(partial.naItems);
+      mergedFox = mergedFox || !!partial.foxReport;
+    }
+    // Now run the matcher ONCE against the merged item list so cross-ref matches
+    // can see all priced items at once. extractFromVendorFile already returns results
+    // from matching against its own pricedItems — but for multi-file vendors we need
+    // to re-match against the merged set.
+    const vendorData = state.crossref.vendors[vendorKey] || { entries: [] };
+    const refEntries = vendorData.entries || [];
+    const results = [];
+    for (const entry of refEntries) {
+      if (entry.manualOverride) {
+        results.push({
+          harrison: entry.harrison, vendorDesc: entry.vendorDesc, matchedDesc: null,
+          price: null, confidence: 'manual-override', manualOverride: true, row: entry.row,
+        });
+        continue;
+      }
+      if (!entry.vendorDesc) {
+        results.push({
+          harrison: entry.harrison, vendorDesc: null, matchedDesc: null,
+          price: null, confidence: 'no-vendor-desc', row: entry.row,
+        });
+        continue;
+      }
+      const match = findPriceWithFallback(vendorKey, entry.vendorDesc, mergedPriced, mergedNa, mergedFox ? { truncPrefix: true } : {});
+      if (!match) {
+        results.push({
+          harrison: entry.harrison, vendorDesc: entry.vendorDesc, matchedDesc: null,
+          price: null, confidence: 'not-found', row: entry.row,
+        });
+      } else {
+        results.push({
+          harrison: entry.harrison, vendorDesc: entry.vendorDesc,
+          matchedDesc: match.matchedDesc, price: match.price,
+          confidence: match.confidence, row: entry.row,
+        });
+      }
+    }
+    state.vendorFiles[vendorKey].status = 'done';
+    state.vendorFiles[vendorKey].items = mergedPriced;
+    state.vendorFiles[vendorKey].naItems = mergedNa;
+    state.vendorFiles[vendorKey].statusText = '';
+    state.results[vendorKey] = results;
+  } catch (e) {
+    console.error(e);
+    state.vendorFiles[vendorKey].status = 'error';
+    alert(`Failed to process ${files.map(f => f.name).join(', ')}: ${e.message || e}`);
+  }
+  renderBatchChips();
+}
+// =================== EVENT WIRING ===================
+function wireDropzone(zoneEl, inputEl, handler) {
+  // zoneEl is a <label> wrapping inputEl — clicking the label natively opens the
+  // file picker, no JS click needed.
+  inputEl.addEventListener('change', e => handler(Array.from(e.target.files)));
+  ['dragenter','dragover'].forEach(ev =>
+    zoneEl.addEventListener(ev, e => { e.preventDefault(); zoneEl.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(ev =>
+    zoneEl.addEventListener(ev, e => { e.preventDefault(); zoneEl.classList.remove('dragover'); }));
+  zoneEl.addEventListener('drop', e => {
+    if (e.dataTransfer.files) handler(Array.from(e.dataTransfer.files));
+  });
+}
+// Cross-reference handler - shared by manual drop and (optional) Notion auto-load.
+async function handleCrossReferenceFile(f, opts) {
+  opts = opts || {};
+  try {
+    state.crossref = await loadCrossReference(f);
+    const tabs = Object.keys(state.crossref.vendors);
+    const totalEntries = tabs.reduce((sum, t) => sum + state.crossref.vendors[t].entries.length, 0);
+    const mappedEntries = tabs.reduce((sum, t) => sum + state.crossref.vendors[t].entries.filter(e => e.vendorDesc).length, 0);
+    $('#crossref-summary').classList.remove('hide');
+    const tag = opts.auto ? `<span style="color:var(--good);font-weight:600;">Auto-loaded${opts.source ? ' from ' + opts.source : ''}</span> ` : '';
+    const hint = opts.auto ? ` <span style="color:var(--ink-mute);">— drop a different file above to override.</span>` : '';
+    $('#crossref-summary').innerHTML =
+      `${tag}<strong style="font-family:var(--sans);color:var(--ink);">${escapeHtml(f.name)}</strong> loaded — ` +
+      `${tabs.length} vendor tabs, ${mappedEntries} mapped products out of ${totalEntries} total rows.${hint}`;
+    setStatus($('#crossref-status'), opts.auto ? 'auto-loaded' : 'loaded', true);
+    setStatus($('#vendors-status'), 'ready for vendor files', false);
+    $('#step-crossref').classList.add('done');
+    return true;
+  } catch (e) {
+    console.error(e);
+    if (!opts.auto) alert('Failed to load cross-reference: ' + (e.message || e));
+    return false;
+  }
+}
+wireDropzone($('#crossref-drop'), $('#crossref-input'), async files => {
+  if (!files.length) return;
+  await handleCrossReferenceFile(files[0], { auto: false });
+});
+// Batch vendor handler
+wireDropzone($('#batch-drop'), $('#batch-input'), async files => {
+  if (!state.crossref) {
+    alert('Please load your cross-reference workbook first.');
+    return;
+  }
+  for (const f of files) {
+    await processVendorFile(f, null);
+  }
+  renderPreview();
+});
+// Mode toggle
+$$('.mode-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    state.mode = btn.getAttribute('data-mode');
+    $$('.mode-tab').forEach(b => b.classList.toggle('active', b === btn));
+    $$('.mode-section').forEach(sec => {
+      sec.classList.toggle('active', sec.getAttribute('data-mode') === state.mode);
+    });
+  });
+});
+// Apply button
+$('#btn-apply').addEventListener('click', applyAndDownload);
+// Reset
+$('#btn-reset').addEventListener('click', () => {
+  if (!confirm('Clear all loaded files and start over?')) return;
+  state.vendorFiles = {};
+  state.results = {};
+  // Don't clear cross-ref — that's still useful for next run
+  renderBatchChips();
+  updateVendorCards();
+  renderPreview();
+});
+// Initialize
+buildVendorCards();
+autoLoadMasterFromNotion();
+</script>
+</body></html>
